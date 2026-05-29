@@ -1,3 +1,5 @@
+import threading
+import time
 from collections import deque
 
 import numpy as np
@@ -94,3 +96,24 @@ def test_refine_history_is_bounded():
 def test_format_timing():
     line = assistant.format_timing(endpoint_ms=700, stt_ms=240, refine_ms=180, reply_start_ms=430)
     assert line == "⏱ endpoint ~700ms · stt 240ms · refine 180ms · reply-start +430ms"
+
+
+def test_tts_player_stop_interrupts():
+    # Use `sleep` as a stand-in for `say` so the test is deterministic and silent.
+    player = assistant.TtsPlayer(cmd_prefix=("sleep",))
+    start = time.perf_counter()
+    t = threading.Thread(target=player.speak, args=("5",))
+    t.start()
+    time.sleep(0.2)
+    player.stop()
+    t.join(timeout=2)
+    elapsed = time.perf_counter() - start
+    assert not t.is_alive()
+    assert elapsed < 2.0   # interrupted, did not wait the full 5s
+
+
+def test_tts_player_speak_completes():
+    player = assistant.TtsPlayer(cmd_prefix=("sleep",))
+    start = time.perf_counter()
+    player.speak("0.05")
+    assert time.perf_counter() - start < 1.0

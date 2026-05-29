@@ -92,3 +92,25 @@ def refine(text, history, chat_fn):
     out = chat_fn(messages).strip()
     history.append({"role": "assistant", "content": out})
     return out
+
+
+class TtsPlayer:
+    """Speaks text via macOS `say`, interruptibly. .speak() blocks until the
+    utterance finishes or .stop() kills it. The interruptible primitive that a
+    future barge-in feature builds on (live barge-in itself is out of P0 scope)."""
+
+    def __init__(self, cmd_prefix=("say",)):
+        self.cmd_prefix = tuple(cmd_prefix)
+        self._proc = None
+
+    def speak(self, text):
+        self._proc = subprocess.Popen([*self.cmd_prefix, text])
+        try:
+            self._proc.wait()
+        finally:
+            self._proc = None
+
+    def stop(self):
+        proc = self._proc
+        if proc and proc.poll() is None:
+            proc.terminate()
