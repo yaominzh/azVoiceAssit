@@ -10,6 +10,9 @@ from collections import deque
 import numpy as np
 import mlx_whisper                       # add near the top imports
 from openai import OpenAI                # add near the top imports
+import sounddevice as sd                 # add near the top imports
+import torch                             # add near the top imports
+from silero_vad import load_silero_vad, VADIterator   # add near the top imports
 
 # ---------------------------------------------------------------------------
 # CONSTANTS
@@ -136,3 +139,97 @@ class TtsPlayer:
         proc = self._proc
         if proc and proc.poll() is None:
             proc.terminate()
+
+
+def run_once(text, client, speak=False):
+    """Headless: refine one line of text with no microphone. For deterministic
+    manual/integration checks of the refine + oMLX wiring."""
+    history = deque(maxlen=HISTORY_MAXLEN)
+    refined = refine(text, history, make_chat_fn(client))
+    print(f"  heard:   {text}")
+    print(f"  refined: {refined}")
+    if speak:
+        TtsPlayer().speak(refined)
+    return refined
+
+
+def main():
+    client = OpenAI(base_url=OMLX_BASE_URL, api_key=OMLX_API_KEY)
+
+    if len(sys.argv) >= 3 and sys.argv[1] == "--once":
+        run_once(sys.argv[2], client, speak="--speak" in sys.argv)
+        return
+
+    chat_fn = make_chat_fn(client)
+    print("Loading models...")
+    vad = VADIterator(load_silero_vad(), threshold=SPEECH_THRESHOLD,
+                      sampling_rate=SAMPLE_RATE, min_silence_duration_ms=MIN_SILENCE_MS)
+    try:
+        warm_up(chat_fn, transcribe)
+    except Exception as e:
+        print(f"oMLX not reachable at {OMLX_BASE_URL} — is it running? ({e})")
+        return
+
+    history = deque(maxlen=HISTORY_MAXLEN)
+    seg = Segmenter(PREROLL_FRAMES)
+    player = TtsPlayer()
+    audio_q = queue.Queue()
+    state = {"speaking": False}
+
+    def cb(indata, frames, time_, status):
+        if not state["speaking"]:
+            audio_q.put(indata[:, 0].copy())
+
+    print("Listening. Speak, then pause. Ctrl-C to quit.")
+    with sd.InputStream(samplerate=SAMPLE_RATE, channels=1, blocksize=FRAME,
+                        dtype="float32", callback=cb):
+        while True:
+            chunk = audio_q.get()
+
+            # Guard scope 1: frame intake + VAD feed (runs every frame).
+            try:
+                frame = validate_frame(chunk)
+                if frame is None:
+                    continue
+                event = vad(torch.from_numpy(frame))
+            except Exception as e:
+                print(f"[error] vad: {e}")
+                vad.reset_states()
+                continue
+
+            utterance = seg.push(frame, event)
+            if utterance is None:
+                continue
+
+            # Guard scope 2: the turn pipeline.
+            try:
+                t0 = time.perf_counter()
+                text = transcribe(utterance)
+                t1 = time.perf_counter()
+                if not text:
+                    continue
+                refined = refine(text, history, chat_fn)
+                t2 = time.perf_counter()
+                print(f"  heard:   {text}")
+                print(f"  refined: {refined}")
+                print(format_timing(
+                    endpoint_ms=MIN_SILENCE_MS,
+                    stt_ms=round((t1 - t0) * 1000),
+                    refine_ms=round((t2 - t1) * 1000),
+                    reply_start_ms=round((t2 - t0) * 1000)))
+                state["speaking"] = True
+                player.speak(refined)
+            except Exception as e:
+                print(f"[error] turn: {e}")
+            finally:
+                state["speaking"] = False
+                vad.reset_states()
+                with audio_q.mutex:
+                    audio_q.queue.clear()
+
+
+if __name__ == "__main__":
+    try:
+        main()
+    except KeyboardInterrupt:
+        print("\nbye")
