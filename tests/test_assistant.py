@@ -1,3 +1,5 @@
+from collections import deque
+
 import numpy as np
 import assistant
 
@@ -56,3 +58,34 @@ def test_segmenter_resets_between_utterances():
     seg.push(_frame(3.0), {"start": 0})
     utt = seg.push(_frame(3.0), {"end": 1})
     assert np.all(np.isin(np.unique(utt), [1.0, 3.0]))  # only preroll(1.0)+speech(3.0)
+
+
+def test_refine_appends_user_then_assistant_and_uses_window():
+    captured = {}
+
+    def fake_chat(messages):
+        captured["messages"] = list(messages)
+        return "Clean sentence."
+
+    history = deque(maxlen=40)
+    out = assistant.refine("um the meetin tomorrow", history, fake_chat)
+
+    assert out == "Clean sentence."
+    # System prompt first, then the user turn already appended before the call.
+    assert captured["messages"][0] == {"role": "system", "content": assistant.SYSTEM_PROMPT}
+    assert captured["messages"][-1] == {"role": "user", "content": "um the meetin tomorrow"}
+    # History now records both sides.
+    assert list(history)[-2:] == [
+        {"role": "user", "content": "um the meetin tomorrow"},
+        {"role": "assistant", "content": "Clean sentence."},
+    ]
+
+
+def test_refine_history_is_bounded():
+    history = deque(maxlen=4)   # 2 turns
+    assistant.refine("one", history, lambda m: "r1")
+    assistant.refine("two", history, lambda m: "r2")
+    assistant.refine("three", history, lambda m: "r3")
+    assert len(history) == 4
+    # Oldest ("one"/"r1") dropped; newest two turns retained.
+    assert {m["content"] for m in history} == {"two", "r2", "three", "r3"}

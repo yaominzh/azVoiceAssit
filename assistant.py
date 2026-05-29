@@ -73,3 +73,13 @@ class Segmenter:
         else:
             self.preroll.append(frame)
         return None
+
+
+def refine(text, history, chat_fn):
+    """Refine one utterance. Appends the turn to the bounded history window and
+    feeds that window to chat_fn (so refine is context-aware but capped)."""
+    history.append({"role": "user", "content": text})
+    messages = [{"role": "system", "content": SYSTEM_PROMPT}] + list(history)
+    out = chat_fn(messages).strip()
+    history.append({"role": "assistant", "content": out})
+    return out
