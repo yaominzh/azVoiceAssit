@@ -1,3 +1,10 @@
+> ⚠️ **SUPERSEDED — do not implement from this file.**
+> The canonical design is
+> [`docs/superpowers/specs/2026-05-29-voice-assistant-p0-design.md`](../docs/superpowers/specs/2026-05-29-voice-assistant-p0-design.md).
+> This early draft is missing the fixes from code review (Whisper warm-up,
+> pre-roll, real latency metric, frame-intake guard, history-into-refine,
+> corrected barge-in framing) and its inline code is stale. Kept only for history.
+
 # P0: Long-lived Voice Assistant Loop
 
 ## Context
