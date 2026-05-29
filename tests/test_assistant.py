@@ -117,3 +117,21 @@ def test_tts_player_speak_completes():
     start = time.perf_counter()
     player.speak("0.05")
     assert time.perf_counter() - start < 1.0
+
+
+def test_warm_up_calls_both_models():
+    calls = {"chat": 0, "stt": 0, "stt_len": None}
+
+    def fake_chat(messages):
+        calls["chat"] += 1
+        return "ok"
+
+    def fake_transcribe(audio):
+        calls["stt"] += 1
+        calls["stt_len"] = len(audio)
+        return ""
+
+    assistant.warm_up(fake_chat, fake_transcribe)
+    assert calls["chat"] == 1
+    assert calls["stt"] == 1
+    assert calls["stt_len"] == assistant.SAMPLE_RATE   # 1s of silence

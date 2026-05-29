@@ -8,6 +8,8 @@ import subprocess
 from collections import deque
 
 import numpy as np
+import mlx_whisper                       # add near the top imports
+from openai import OpenAI                # add near the top imports
 
 # ---------------------------------------------------------------------------
 # CONSTANTS
@@ -92,6 +94,26 @@ def refine(text, history, chat_fn):
     out = chat_fn(messages).strip()
     history.append({"role": "assistant", "content": out})
     return out
+
+
+def transcribe(audio):
+    return mlx_whisper.transcribe(audio, path_or_hf_repo=WHISPER_REPO)["text"].strip()
+
+
+def make_chat_fn(client):
+    """Bind an oMLX-backed chat function: messages -> assistant string."""
+    def chat_fn(messages):
+        resp = client.chat.completions.create(
+            model=OMLX_MODEL, messages=messages, temperature=0.3)
+        return resp.choices[0].message.content
+    return chat_fn
+
+
+def warm_up(chat_fn, transcribe_fn):
+    """Pre-warm BOTH models so turn-1 latency ~= later turns. The chat call also
+    serves as the oMLX reachability check (raises if the server is down)."""
+    chat_fn([{"role": "user", "content": "hi"}])
+    transcribe_fn(np.zeros(SAMPLE_RATE, dtype=np.float32))
 
 
 class TtsPlayer:
