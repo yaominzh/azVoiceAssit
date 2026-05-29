@@ -42,3 +42,35 @@ def validate_frame(chunk):
     if n < FRAME:
         return np.pad(chunk, (0, FRAME - n))
     return None
+
+
+class Segmenter:
+    """Assembles utterances from (frame, vad_event) pairs, with onset pre-roll.
+
+    VADIterator reports 'start' AFTER speech onset, so we keep a ring buffer of
+    recent frames and seed the utterance with it to avoid clipping leading phonemes.
+    push() returns a concatenated utterance on the 'end' event, else None.
+    """
+
+    def __init__(self, preroll_frames):
+        self.preroll = deque(maxlen=preroll_frames)
+        self.buffer = []
+        self.collecting = False
+
+    def push(self, frame, event):
+        if event and "start" in event:
+            self.collecting = True
+            self.buffer = list(self.preroll)   # silence frames before onset
+            self.buffer.append(frame)          # the start frame itself
+            self.preroll.clear()
+            return None
+        if not self.collecting:
+            self.preroll.append(frame)
+        if self.collecting:
+            self.buffer.append(frame)
+            if event and "end" in event:
+                self.collecting = False
+                utterance = np.concatenate(self.buffer)
+                self.buffer = []
+                return utterance
+        return None
