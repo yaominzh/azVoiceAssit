@@ -1,0 +1,7 @@
+sounddevice
+numpy
+silero-vad
+mlx-whisper
+openai
+torch
+pytest
