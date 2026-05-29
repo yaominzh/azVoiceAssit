@@ -75,6 +75,15 @@ class Segmenter:
         return None
 
 
+def format_timing(endpoint_ms, stt_ms, refine_ms, reply_start_ms):
+    """One-line per-turn latency readout. reply_start = end-of-speech -> TTS start
+    (NOT playback duration). endpoint = the felt VAD silence tax."""
+    return (
+        f"⏱ endpoint ~{endpoint_ms}ms · stt {stt_ms}ms · "
+        f"refine {refine_ms}ms · reply-start +{reply_start_ms}ms"
+    )
+
+
 def refine(text, history, chat_fn):
     """Refine one utterance. Appends the turn to the bounded history window and
     feeds that window to chat_fn (so refine is context-aware but capped)."""

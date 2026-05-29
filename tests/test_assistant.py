@@ -89,3 +89,8 @@ def test_refine_history_is_bounded():
     assert len(history) == 4
     # Oldest ("one"/"r1") dropped; newest two turns retained.
     assert {m["content"] for m in history} == {"two", "r2", "three", "r3"}
+
+
+def test_format_timing():
+    line = assistant.format_timing(endpoint_ms=700, stt_ms=240, refine_ms=180, reply_start_ms=430)
+    assert line == "⏱ endpoint ~700ms · stt 240ms · refine 180ms · reply-start +430ms"
