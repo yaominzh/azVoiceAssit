@@ -1,0 +1,44 @@
+#!/usr/bin/env python3
+"""P0 voice assistant: listen -> transcribe -> refine -> speak, in one warm loop."""
+import os
+import sys
+import time
+import queue
+import subprocess
+from collections import deque
+
+import numpy as np
+
+# ---------------------------------------------------------------------------
+# CONSTANTS
+# ---------------------------------------------------------------------------
+SAMPLE_RATE = 16000
+FRAME = 512                                  # samples per VAD window at 16 kHz (~32 ms)
+PREROLL_MS = 250
+PREROLL_FRAMES = max(1, round(PREROLL_MS / 1000 * SAMPLE_RATE / FRAME))  # ~8 frames
+MIN_SILENCE_MS = 700                         # VAD end-of-turn silence; the felt "endpoint" tax
+SPEECH_THRESHOLD = 0.5
+WHISPER_REPO = "mlx-community/whisper-base-mlx"
+HISTORY_MAXLEN = 40                          # bounded deque (~20 turns); fed into refine
+OMLX_BASE_URL = os.environ.get("OMLX_BASE_URL", "http://127.0.0.1:8002/v1")
+OMLX_API_KEY = os.environ.get("OMLX_API_KEY", "rdaz1234")
+OMLX_MODEL = os.environ.get("OMLX_MODEL", "gemma-4-e4b-it-8bit")
+SYSTEM_PROMPT = (
+    "You are a refinement assistant. The user gives you a raw spoken utterance. "
+    "Repeat it back, cleaned up: fix grammar, drop filler words and false starts, "
+    "keep the meaning and tone. Reply with ONLY the refined sentence, nothing else."
+)
+
+
+def validate_frame(chunk):
+    """Coerce a captured block to exactly FRAME samples, or None if unusable.
+
+    Silero VADIterator requires exactly 512-sample windows at 16 kHz; an xrun or
+    odd final block would otherwise raise in the per-frame path and kill the loop.
+    """
+    n = len(chunk)
+    if n == FRAME:
+        return chunk
+    if n < FRAME:
+        return np.pad(chunk, (0, FRAME - n))
+    return None
