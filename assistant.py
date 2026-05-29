@@ -62,15 +62,14 @@ class Segmenter:
             self.collecting = True
             self.buffer = list(self.preroll)   # silence frames before onset
             self.buffer.append(frame)          # the start frame itself
-            self.preroll.clear()
-            return None
-        if not self.collecting:
-            self.preroll.append(frame)
-        if self.collecting:
+            self.preroll.clear()               # so the next utterance doesn't inherit this silence
+        elif self.collecting:
             self.buffer.append(frame)
             if event and "end" in event:
                 self.collecting = False
                 utterance = np.concatenate(self.buffer)
                 self.buffer = []
                 return utterance
+        else:
+            self.preroll.append(frame)
         return None
