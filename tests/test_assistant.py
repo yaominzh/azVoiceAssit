@@ -1,9 +1,11 @@
+import json
 import threading
 import time
 from collections import deque
 
 import numpy as np
 import assistant
+import ui_server
 
 
 def test_validate_frame_passes_exact():
@@ -135,3 +137,10 @@ def test_warm_up_calls_both_models():
     assert calls["chat"] == 1
     assert calls["stt"] == 1
     assert calls["stt_len"] == assistant.SAMPLE_RATE   # 1s of silence
+
+
+def test_sse_format_frames_event():
+    out = ui_server.sse_format({"type": "state", "value": "thinking"})
+    assert out == 'data: {"type": "state", "value": "thinking"}\n\n'
+    # Round-trips back to the same dict.
+    assert json.loads(out[len("data: "):].strip()) == {"type": "state", "value": "thinking"}
