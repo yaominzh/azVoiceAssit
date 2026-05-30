@@ -155,3 +155,75 @@ def test_nullbus_prints_three_lines_and_is_otherwise_noop(capsys):
     out = capsys.readouterr().out
     assert out == "  heard:   raw words\n  refined: Clean words.\nTIMING 100/200\n"
     assert bus.listening_enabled is True
+
+
+class _FakePlayer:
+    def __init__(self):
+        self.stopped = False
+    def stop(self):
+        self.stopped = True
+
+
+def test_uibus_subscribe_gets_current_state_snapshot():
+    bus = ui_server.UiBus(history=deque(), player=_FakePlayer())
+    bus.set_state("speaking")
+    sub = bus.subscribe()
+    assert sub.drain(timeout=0) == [{"type": "state", "value": "speaking"}]
+
+
+def test_uibus_set_state_and_push_turn_broadcast():
+    bus = ui_server.UiBus(history=deque(), player=_FakePlayer())
+    sub = bus.subscribe()
+    sub.drain(timeout=0)  # discard the initial snapshot
+    bus.set_state("thinking")
+    bus.push_turn("h", "r", {"endpoint": 700, "stt": 1, "refine": 2, "reply_start": 3})
+    assert sub.drain(timeout=0) == [
+        {"type": "state", "value": "thinking"},
+        {"type": "turn", "heard": "h", "refined": "r",
+         "timing": {"endpoint": 700, "stt": 1, "refine": 2, "reply_start": 3}},
+    ]
+
+
+def test_uibus_clear_resets_history_and_broadcasts():
+    hist = deque([{"role": "user", "content": "x"}])
+    bus = ui_server.UiBus(history=hist, player=_FakePlayer())
+    sub = bus.subscribe(); sub.drain(timeout=0)
+    bus.clear()
+    assert len(hist) == 0
+    assert sub.drain(timeout=0) == [{"type": "clear"}]
+
+
+def test_uibus_toggle_mic_updates_flag_and_idle_state():
+    bus = ui_server.UiBus(history=deque(), player=_FakePlayer())
+    sub = bus.subscribe(); sub.drain(timeout=0)   # state is "listening" by default
+    bus.toggle_mic()
+    assert bus.listening_enabled is False
+    assert sub.drain(timeout=0) == [{"type": "state", "value": "muted"}]
+
+
+def test_uibus_toggle_mic_mid_turn_does_not_change_symbol():
+    bus = ui_server.UiBus(history=deque(), player=_FakePlayer())
+    bus.set_state("speaking")
+    sub = bus.subscribe(); sub.drain(timeout=0)
+    bus.toggle_mic()              # mid-turn: flag flips, but no state event
+    assert bus.listening_enabled is False
+    assert sub.drain(timeout=0) == []
+
+
+def test_uibus_stop_speaking_calls_player():
+    player = _FakePlayer()
+    bus = ui_server.UiBus(history=deque(), player=player)
+    bus.stop_speaking()
+    assert player.stopped is True
+
+
+def test_uibus_overflow_drops_oldest_keeps_latest_state():
+    bus = ui_server.UiBus(history=deque(), player=_FakePlayer())
+    sub = ui_server._Subscriber(maxlen=2)
+    sub.push({"type": "state", "value": "a"})
+    sub.push({"type": "state", "value": "b"})
+    sub.push({"type": "state", "value": "c"})   # overflow drops "a"
+    assert sub.drain(timeout=0) == [
+        {"type": "state", "value": "b"},
+        {"type": "state", "value": "c"},
+    ]
