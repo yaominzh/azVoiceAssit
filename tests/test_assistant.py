@@ -144,3 +144,14 @@ def test_sse_format_frames_event():
     assert out == 'data: {"type": "state", "value": "thinking"}\n\n'
     # Round-trips back to the same dict.
     assert json.loads(out[len("data: "):].strip()) == {"type": "state", "value": "thinking"}
+
+
+def test_nullbus_prints_three_lines_and_is_otherwise_noop(capsys):
+    timing = {"endpoint": 700, "stt": 100, "refine": 200, "reply_start": 300}
+    bus = ui_server.NullBus(lambda t: f"TIMING {t['stt']}/{t['refine']}")
+    bus.set_state("thinking")      # no-op
+    bus.clear()                    # no-op
+    bus.push_turn("raw words", "Clean words.", timing)
+    out = capsys.readouterr().out
+    assert out == "  heard:   raw words\n  refined: Clean words.\nTIMING 100/200\n"
+    assert bus.listening_enabled is True
