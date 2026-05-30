@@ -227,3 +227,24 @@ def test_uibus_overflow_drops_oldest_keeps_latest_state():
         {"type": "state", "value": "b"},
         {"type": "state", "value": "c"},
     ]
+
+
+def test_resolve_static_whitelist():
+    assert ui_server.resolve_static("/") == "index.html"
+    assert ui_server.resolve_static("/index.html") == "index.html"
+    assert ui_server.resolve_static("/app.js") == "app.js"
+    assert ui_server.resolve_static("/style.css") == "style.css"
+    # Anything else (incl. traversal attempts) is rejected.
+    assert ui_server.resolve_static("/../assistant.py") is None
+    assert ui_server.resolve_static("/secret") is None
+
+
+def test_control_action_routes_to_bus():
+    bus = ui_server.UiBus(history=deque([1]), player=_FakePlayer())
+    assert ui_server.control_action("/control/mic", bus) == 204
+    assert bus.listening_enabled is False
+    assert ui_server.control_action("/control/clear", bus) == 204
+    assert len(bus.history) == 0
+    assert ui_server.control_action("/control/stop", bus) == 204
+    assert bus.player.stopped is True
+    assert ui_server.control_action("/control/bogus", bus) == 400

@@ -106,3 +106,24 @@ class UiBus:
 
     def stop_speaking(self):
         self.player.stop()
+
+
+_STATIC = {"/": "index.html", "/index.html": "index.html",
+           "/app.js": "app.js", "/style.css": "style.css"}
+
+
+def resolve_static(path):
+    """Map a request path to a whitelisted static filename, or None. No filesystem
+    lookup → no `..` traversal risk."""
+    return _STATIC.get(path)
+
+
+def control_action(path, bus):
+    """Apply a control POST to the bus. Returns an HTTP status code."""
+    if path == "/control/mic":
+        bus.toggle_mic(); return 204
+    if path == "/control/clear":
+        bus.clear(); return 204
+    if path == "/control/stop":
+        bus.stop_speaking(); return 204
+    return 400
