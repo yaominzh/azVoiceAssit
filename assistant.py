@@ -5,9 +5,11 @@ import sys
 import time
 import queue
 import subprocess
+import threading
 from collections import deque
 
 import numpy as np
+import ui_server
 import mlx_whisper                       # add near the top imports
 from openai import OpenAI                # add near the top imports
 import sounddevice as sd                 # add near the top imports
@@ -176,11 +178,26 @@ def main():
     audio_q = queue.Queue()
     state = {"speaking": False}
 
+    if "--ui" in sys.argv:
+        bus = ui_server.UiBus(history, player)
+        port = int(os.environ.get("UI_PORT", "8765"))
+        try:
+            server = ui_server.make_server(bus, port=port)   # binds here; fail loud
+        except OSError as e:
+            print(f"UI port {port} unavailable ({e}). Set UI_PORT to a free port.")
+            return
+        threading.Thread(target=server.serve_forever, daemon=True).start()
+        print(f"UI at http://localhost:{port}")
+    else:
+        bus = ui_server.NullBus(
+            lambda t: format_timing(t["endpoint"], t["stt"], t["refine"], t["reply_start"]))
+
     def cb(indata, frames, time_, status):
-        if not state["speaking"]:
+        if not state["speaking"] and bus.listening_enabled:
             audio_q.put(indata[:, 0].copy())
 
     print("Listening. Speak, then pause. Ctrl-C to quit.")
+    bus.set_state("listening" if bus.listening_enabled else "muted")
     with sd.InputStream(samplerate=SAMPLE_RATE, channels=1, blocksize=FRAME,
                         dtype="float32", callback=cb):
         while True:
@@ -203,6 +220,7 @@ def main():
 
             # Guard scope 2: the turn pipeline.
             try:
+                bus.set_state("thinking")
                 t0 = time.perf_counter()
                 text = transcribe(utterance)
                 t1 = time.perf_counter()
@@ -210,14 +228,13 @@ def main():
                     continue
                 refined = refine(text, history, chat_fn)
                 t2 = time.perf_counter()
-                print(f"  heard:   {text}")
-                print(f"  refined: {refined}")
-                print(format_timing(
-                    endpoint_ms=MIN_SILENCE_MS,
-                    stt_ms=round((t1 - t0) * 1000),
-                    refine_ms=round((t2 - t1) * 1000),
-                    reply_start_ms=round((t2 - t0) * 1000)))
+                bus.push_turn(text, refined, {
+                    "endpoint": MIN_SILENCE_MS,
+                    "stt": round((t1 - t0) * 1000),
+                    "refine": round((t2 - t1) * 1000),
+                    "reply_start": round((t2 - t0) * 1000)})
                 state["speaking"] = True
+                bus.set_state("speaking")
                 player.speak(refined)
             except Exception as e:
                 print(f"[error] turn: {e}")
@@ -226,6 +243,7 @@ def main():
                 vad.reset_states()
                 with audio_q.mutex:
                     audio_q.queue.clear()
+                bus.set_state("listening" if bus.listening_enabled else "muted")
 
 
 if __name__ == "__main__":
