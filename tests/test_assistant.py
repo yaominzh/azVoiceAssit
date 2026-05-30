@@ -1,9 +1,11 @@
+import json
 import threading
 import time
 from collections import deque
 
 import numpy as np
 import assistant
+import ui_server
 
 
 def test_validate_frame_passes_exact():
@@ -135,3 +137,126 @@ def test_warm_up_calls_both_models():
     assert calls["chat"] == 1
     assert calls["stt"] == 1
     assert calls["stt_len"] == assistant.SAMPLE_RATE   # 1s of silence
+
+
+def test_sse_format_frames_event():
+    out = ui_server.sse_format({"type": "state", "value": "thinking"})
+    assert out == 'data: {"type": "state", "value": "thinking"}\n\n'
+    # Round-trips back to the same dict.
+    assert json.loads(out[len("data: "):].strip()) == {"type": "state", "value": "thinking"}
+
+
+def test_nullbus_prints_three_lines_and_is_otherwise_noop(capsys):
+    timing = {"endpoint": 700, "stt": 100, "refine": 200, "reply_start": 300}
+    bus = ui_server.NullBus(lambda t: f"TIMING {t['stt']}/{t['refine']}")
+    bus.set_state("thinking")      # no-op
+    bus.clear()                    # no-op
+    bus.push_turn("raw words", "Clean words.", timing)
+    out = capsys.readouterr().out
+    assert out == "  heard:   raw words\n  refined: Clean words.\nTIMING 100/200\n"
+    assert bus.listening_enabled is True
+
+
+class _FakePlayer:
+    def __init__(self):
+        self.stopped = False
+    def stop(self):
+        self.stopped = True
+
+
+def test_uibus_subscribe_gets_current_state_snapshot():
+    bus = ui_server.UiBus(history=deque(), player=_FakePlayer())
+    bus.set_state("speaking")
+    sub = bus.subscribe()
+    assert sub.drain(timeout=0) == [{"type": "state", "value": "speaking"}]
+
+
+def test_uibus_set_state_and_push_turn_broadcast():
+    bus = ui_server.UiBus(history=deque(), player=_FakePlayer())
+    sub = bus.subscribe()
+    sub.drain(timeout=0)  # discard the initial snapshot
+    bus.set_state("thinking")
+    bus.push_turn("h", "r", {"endpoint": 700, "stt": 1, "refine": 2, "reply_start": 3})
+    assert sub.drain(timeout=0) == [
+        {"type": "state", "value": "thinking"},
+        {"type": "turn", "heard": "h", "refined": "r",
+         "timing": {"endpoint": 700, "stt": 1, "refine": 2, "reply_start": 3}},
+    ]
+
+
+def test_uibus_clear_resets_history_and_broadcasts():
+    hist = deque([{"role": "user", "content": "x"}])
+    bus = ui_server.UiBus(history=hist, player=_FakePlayer())
+    sub = bus.subscribe(); sub.drain(timeout=0)
+    bus.clear()
+    assert len(hist) == 0
+    assert sub.drain(timeout=0) == [{"type": "clear"}]
+
+
+def test_uibus_toggle_mic_updates_flag_and_idle_state():
+    bus = ui_server.UiBus(history=deque(), player=_FakePlayer())
+    sub = bus.subscribe(); sub.drain(timeout=0)   # state is "listening" by default
+    bus.toggle_mic()
+    assert bus.listening_enabled is False
+    assert sub.drain(timeout=0) == [{"type": "state", "value": "muted"}]
+
+
+def test_uibus_toggle_mic_mid_turn_does_not_change_symbol():
+    bus = ui_server.UiBus(history=deque(), player=_FakePlayer())
+    bus.set_state("speaking")
+    sub = bus.subscribe(); sub.drain(timeout=0)
+    bus.toggle_mic()              # mid-turn: flag flips, but no state event
+    assert bus.listening_enabled is False
+    assert sub.drain(timeout=0) == []
+
+
+def test_uibus_stop_speaking_calls_player():
+    player = _FakePlayer()
+    bus = ui_server.UiBus(history=deque(), player=player)
+    bus.stop_speaking()
+    assert player.stopped is True
+
+
+def test_uibus_overflow_drops_oldest_keeps_latest_state():
+    bus = ui_server.UiBus(history=deque(), player=_FakePlayer())
+    sub = ui_server._Subscriber(maxlen=2)
+    sub.push({"type": "state", "value": "a"})
+    sub.push({"type": "state", "value": "b"})
+    sub.push({"type": "state", "value": "c"})   # overflow drops "a"
+    assert sub.drain(timeout=0) == [
+        {"type": "state", "value": "b"},
+        {"type": "state", "value": "c"},
+    ]
+
+
+def test_resolve_static_whitelist():
+    assert ui_server.resolve_static("/") == "index.html"
+    assert ui_server.resolve_static("/index.html") == "index.html"
+    assert ui_server.resolve_static("/app.js") == "app.js"
+    assert ui_server.resolve_static("/style.css") == "style.css"
+    # Anything else (incl. traversal attempts) is rejected.
+    assert ui_server.resolve_static("/../assistant.py") is None
+    assert ui_server.resolve_static("/secret") is None
+
+
+def test_control_action_routes_to_bus():
+    bus = ui_server.UiBus(history=deque([1]), player=_FakePlayer())
+    assert ui_server.control_action("/control/mic", bus) == 204
+    assert bus.listening_enabled is False
+    assert ui_server.control_action("/control/clear", bus) == 204
+    assert len(bus.history) == 0
+    assert ui_server.control_action("/control/stop", bus) == 204
+    assert bus.player.stopped is True
+    assert ui_server.control_action("/control/bogus", bus) == 400
+
+
+def test_make_server_binds_and_rejects_inuse_port():
+    bus = ui_server.UiBus(history=deque(), player=_FakePlayer())
+    s1 = ui_server.make_server(bus, host="127.0.0.1", port=0, static_dir=".")
+    port = s1.server_address[1]
+    try:
+        import pytest
+        with pytest.raises(OSError):
+            ui_server.make_server(bus, host="127.0.0.1", port=port, static_dir=".")
+    finally:
+        s1.server_close()
