@@ -248,3 +248,15 @@ def test_control_action_routes_to_bus():
     assert ui_server.control_action("/control/stop", bus) == 204
     assert bus.player.stopped is True
     assert ui_server.control_action("/control/bogus", bus) == 400
+
+
+def test_make_server_binds_and_rejects_inuse_port():
+    bus = ui_server.UiBus(history=deque(), player=_FakePlayer())
+    s1 = ui_server.make_server(bus, host="127.0.0.1", port=0, static_dir=".")
+    port = s1.server_address[1]
+    try:
+        import pytest
+        with pytest.raises(OSError):
+            ui_server.make_server(bus, host="127.0.0.1", port=port, static_dir=".")
+    finally:
+        s1.server_close()

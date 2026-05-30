@@ -127,3 +127,62 @@ def control_action(path, bus):
     if path == "/control/stop":
         bus.stop_speaking(); return 204
     return 400
+
+
+_CONTENT_TYPES = {".html": "text/html", ".js": "text/javascript", ".css": "text/css"}
+
+
+def make_handler(bus, static_dir):
+    class Handler(BaseHTTPRequestHandler):
+        def log_message(self, *args):
+            pass  # quiet
+
+        def do_GET(self):
+            if self.path == "/events":
+                self._serve_events()
+                return
+            filename = resolve_static(self.path)
+            if filename is None:
+                self.send_error(404)
+                return
+            try:
+                with open(os.path.join(static_dir, filename), "rb") as f:
+                    body = f.read()
+            except OSError:
+                self.send_error(404)
+                return
+            ext = os.path.splitext(filename)[1]
+            self.send_response(200)
+            self.send_header("Content-Type", _CONTENT_TYPES.get(ext, "application/octet-stream"))
+            self.end_headers()
+            self.wfile.write(body)
+
+        def do_POST(self):
+            status = control_action(self.path, bus)
+            self.send_response(status)
+            self.end_headers()
+
+        def _serve_events(self):
+            self.send_response(200)
+            self.send_header("Content-Type", "text/event-stream")
+            self.send_header("Cache-Control", "no-cache")
+            self.end_headers()
+            sub = bus.subscribe()
+            try:
+                while True:
+                    for event in sub.drain(timeout=1.0):
+                        self.wfile.write(sse_format(event).encode())
+                    self.wfile.flush()
+            except (BrokenPipeError, ConnectionResetError, ValueError):
+                pass
+            finally:
+                bus.unsubscribe(sub)
+
+    return Handler
+
+
+def make_server(bus, host="127.0.0.1", port=8765, static_dir=None):
+    """Bind the server (raises OSError on a taken port — caller fails loudly)."""
+    if static_dir is None:
+        static_dir = os.path.join(os.path.dirname(__file__), "static")
+    return ThreadingHTTPServer((host, port), make_handler(bus, static_dir))
