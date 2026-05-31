@@ -29,6 +29,9 @@ impl Segmenter {
                 self.buffer.push(frame);
                 None
             }
+            // Note: if End arrives without a prior Start, collecting==false and this arm
+            // doesn't fire — the frame is silently treated as silence and rotates into the
+            // pre-roll ring. That is harmless; the VAD should never emit End without Start.
             _ if self.collecting => {
                 self.buffer.push(frame);
                 if event == Some(VadEvent::End) {

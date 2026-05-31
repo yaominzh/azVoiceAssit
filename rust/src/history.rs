@@ -17,6 +17,9 @@ impl History {
     pub fn is_empty(&self) -> bool { self.turns.is_empty() }
 
     fn push(&mut self, v: Value) {
+        // cap=0 silently discards everything — only valid if no history is desired.
+        // Production always uses HISTORY_MAXLEN=40; this is a guard for clarity.
+        debug_assert!(self.cap > 0, "History cap must be > 0");
         if self.turns.len() == self.cap && self.cap > 0 {
             self.turns.pop_front();
         }
