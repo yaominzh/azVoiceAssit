@@ -1,3 +1,5 @@
+use crate::timing::TurnTiming;
+
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum State {
     Listening,
@@ -20,7 +22,7 @@ impl State {
 #[derive(Clone, Debug)]
 pub enum UiEvent {
     StateChanged(State),
-    // Turn variant added in Task 3 once TurnTiming exists
+    Turn { heard: String, refined: String, timing: TurnTiming },
     Cleared,
 }
 
