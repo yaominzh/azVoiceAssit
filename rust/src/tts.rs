@@ -13,14 +13,20 @@ pub fn build_tts_body(text: &str) -> Value {
 /// Player::connect_new(mixer) -> Player, Decoder::try_from(cursor) -> Result.
 pub fn speak(client: &reqwest::blocking::Client, text: &str) -> Result<(), String> {
     let stop = AtomicBool::new(false);
-    speak_stoppable(client, text, &stop)
+    let (_, rx_dummy) = crossbeam_channel::bounded::<crate::events::ControlMsg>(1);
+    speak_stoppable(client, text, &stop, &rx_dummy)
 }
 
 /// Like `speak`, but polls `stop_flag` every 50 ms and returns early if set.
+/// Also drains `rx_ctrl` on each poll tick: a `ControlMsg::Stop` sets the flag
+/// and stops playback immediately; other messages are silently dropped here and
+/// will be re-processed on the next worker loop iteration (they won't arrive
+/// again, but they're low-priority control signals during TTS).
 pub fn speak_stoppable(
     client: &reqwest::blocking::Client,
     text: &str,
     stop_flag: &AtomicBool,
+    rx_ctrl: &crossbeam_channel::Receiver<crate::events::ControlMsg>,
 ) -> Result<(), String> {
     let bytes = client
         .post(crate::config::TTS_URL)
@@ -45,6 +51,11 @@ pub fn speak_stoppable(
             return Ok(());
         }
         if player.empty() {
+            return Ok(());
+        }
+        // Check ctrl channel for Stop during TTS playback
+        if let Ok(crate::events::ControlMsg::Stop) = rx_ctrl.try_recv() {
+            player.stop();
             return Ok(());
         }
         std::thread::sleep(Duration::from_millis(50));

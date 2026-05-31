@@ -81,6 +81,12 @@ fn main() -> eframe::Result<()> {
     eframe::run_native(
         "Voice Assistant",
         options,
-        Box::new(|_cc| Ok(Box::new(ui::VoiceApp::new(rx_ui, tx_ctrl)))),
+        Box::new(move |cc| {
+            let mut style = (*cc.egui_ctx.style()).clone();
+            style.visuals.panel_fill = egui::Color32::from_rgb(0x0B, 0x10, 0x20);
+            style.visuals.window_fill = egui::Color32::from_rgb(0x0B, 0x10, 0x20);
+            cc.egui_ctx.set_style(style);
+            Ok(Box::new(ui::VoiceApp::new(rx_ui, tx_ctrl)))
+        }),
     )
 }

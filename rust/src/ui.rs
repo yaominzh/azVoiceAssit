@@ -51,10 +51,14 @@ impl eframe::App for VoiceApp {
 
         let t = ui.ctx().input(|i| i.time);
 
-        // Alpha pulse for Listening state
+        // Alpha pulse: Listening uses a slow 1.8s cycle; Speaking uses a faster 1.2s glow.
         let alpha: u8 = match self.state {
             State::Listening => {
                 let s = (t as f32 * std::f32::consts::TAU / 1.8).sin();
+                ((0.5 + 0.5 * s) * 127.0 + 128.0).min(255.0) as u8
+            }
+            State::Speaking => {
+                let s = (t as f32 * std::f32::consts::TAU / 1.2).sin();
                 ((0.5 + 0.5 * s) * 127.0 + 128.0).min(255.0) as u8
             }
             _ => 255,

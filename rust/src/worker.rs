@@ -67,8 +67,8 @@ pub fn run(
         };
 
         // Turn pipeline
-        let _ = tx_ui.send(UiEvent::StateChanged(State::Thinking));
         shared.set(State::Thinking);
+        let _ = tx_ui.send(UiEvent::StateChanged(State::Thinking));
 
         let t0 = std::time::Instant::now();
         let text = match stt.transcribe(&utterance) {
@@ -110,7 +110,7 @@ pub fn run(
         speaking.store(true, Ordering::SeqCst);
         stop_tts.store(false, Ordering::SeqCst);
 
-        let _ = crate::tts::speak_stoppable(&client, &refined, &stop_tts);
+        let _ = crate::tts::speak_stoppable(&client, &refined, &stop_tts, &rx_ctrl);
 
         speaking.store(false, Ordering::SeqCst);
         reset_to_idle(&shared, &tx_ui, &mut vad);
