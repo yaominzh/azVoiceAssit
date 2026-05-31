@@ -604,7 +604,7 @@ from mlx_audio.tts.utils import load_model
 from mlx_audio.tts.generate import generate_audio
 
 MODEL_PATH = "mlx-community/Qwen3-TTS-12Hz-1.7B-VoiceDesign-8bit"
-INSTRUCT = "a warm, clear voice, calm and natural"
+INSTRUCT = "a clear natural male voice, calm, mid-range pitch, like a friendly colleague"
 
 app = FastAPI()
 model = load_model(MODEL_PATH)   # loaded once at startup (heavy)
