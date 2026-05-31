@@ -10,9 +10,9 @@ pub struct AppSettings {
 impl Default for AppSettings {
     fn default() -> Self {
         Self {
-            system_prompt: crate::config::SYSTEM_PROMPT.to_string(),
-            silence_ms: crate::config::MIN_SILENCE_MS,
-            speech_threshold: crate::config::SPEECH_THRESHOLD,
+            system_prompt: SYSTEM_PROMPT.to_string(),
+            silence_ms: MIN_SILENCE_MS,
+            speech_threshold: SPEECH_THRESHOLD,
         }
     }
 }
