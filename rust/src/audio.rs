@@ -3,12 +3,16 @@ use crossbeam_channel::Sender;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use crate::config::{SAMPLE_RATE, FRAME};
+use crate::state::SharedState;
 
 /// Open the default mic, chunk frames to FRAME size, send when enabled and not speaking.
 /// Returns the Stream — caller must keep it alive.
+///
+/// `shared` provides `listening_enabled`; `speaking` is a separate flag set by the worker
+/// while TTS is playing (so we don't feed microphone back into the pipeline).
 pub fn start_capture(
     tx: Sender<Vec<f32>>,
-    enabled: Arc<AtomicBool>,
+    shared: Arc<SharedState>,
     speaking: Arc<AtomicBool>,
 ) -> Result<cpal::Stream, String> {
     let host = cpal::default_host();
@@ -28,7 +32,9 @@ pub fn start_capture(
         .build_input_stream(
             &config,
             move |data: &[f32], _: &cpal::InputCallbackInfo| {
-                if !enabled.load(Ordering::Relaxed) || speaking.load(Ordering::Relaxed) {
+                if !shared.listening_enabled.load(Ordering::Relaxed)
+                    || speaking.load(Ordering::Relaxed)
+                {
                     return;
                 }
                 chunk_buf.extend_from_slice(data);

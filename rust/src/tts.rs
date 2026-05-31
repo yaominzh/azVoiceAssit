@@ -1,5 +1,6 @@
 use serde_json::{json, Value};
 use std::io::Cursor;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 pub fn build_tts_body(text: &str) -> Value {
@@ -11,6 +12,16 @@ pub fn build_tts_body(text: &str) -> Value {
 /// rodio 0.22.x API: DeviceSinkBuilder::open_default_sink() -> MixerDeviceSink,
 /// Player::connect_new(mixer) -> Player, Decoder::try_from(cursor) -> Result.
 pub fn speak(client: &reqwest::blocking::Client, text: &str) -> Result<(), String> {
+    let stop = AtomicBool::new(false);
+    speak_stoppable(client, text, &stop)
+}
+
+/// Like `speak`, but polls `stop_flag` every 50 ms and returns early if set.
+pub fn speak_stoppable(
+    client: &reqwest::blocking::Client,
+    text: &str,
+    stop_flag: &AtomicBool,
+) -> Result<(), String> {
     let bytes = client
         .post(crate::config::TTS_URL)
         .json(&build_tts_body(text))
@@ -26,8 +37,18 @@ pub fn speak(client: &reqwest::blocking::Client, text: &str) -> Result<(), Strin
     let src = rodio::Decoder::try_from(Cursor::new(bytes.to_vec()))
         .map_err(|e| format!("decode: {e}"))?;
     player.append(src);
-    player.sleep_until_end();
-    Ok(())
+
+    // Poll until playback finishes or stop_flag is set
+    loop {
+        if stop_flag.load(Ordering::SeqCst) {
+            player.stop();
+            return Ok(());
+        }
+        if player.empty() {
+            return Ok(());
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    }
 }
 
 #[cfg(test)]

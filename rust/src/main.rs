@@ -8,8 +8,79 @@ mod state;
 mod stt;
 mod timing;
 mod tts;
+mod ui;
 mod vad;
+mod worker;
 
-fn main() {
-    println!("azva scaffold OK");
+use std::sync::{Arc, atomic::AtomicBool};
+use crossbeam_channel::bounded;
+use crate::events::{ControlMsg, UiEvent};
+
+fn main() -> eframe::Result<()> {
+    // Reachability checks — fail loud and early
+    let client = reqwest::blocking::Client::new();
+    match client
+        .get("http://127.0.0.1:8002/v1/models")
+        .header("Authorization", format!("Bearer {}", config::OMLX_API_KEY))
+        .timeout(std::time::Duration::from_secs(5))
+        .send()
+    {
+        Err(e) => {
+            eprintln!("oMLX not reachable at :8002: {e}");
+            std::process::exit(1);
+        }
+        Ok(r) if !r.status().is_success() => {
+            eprintln!("oMLX error: {}", r.status());
+            std::process::exit(1);
+        }
+        _ => {}
+    }
+    match client
+        .get("http://127.0.0.1:8123/")
+        .timeout(std::time::Duration::from_secs(5))
+        .send()
+    {
+        Err(e) => {
+            eprintln!("TTS service not reachable at :8123: {e}");
+            std::process::exit(1);
+        }
+        _ => {}
+    }
+
+    // Channels
+    let (tx_audio, rx_audio) = bounded::<Vec<f32>>(256);
+    let (tx_ctrl, rx_ctrl) = bounded::<ControlMsg>(64);
+    let (tx_ui, rx_ui) = bounded::<UiEvent>(256);
+
+    // Shared state
+    let shared = Arc::new(state::SharedState::new());
+    let speaking = Arc::new(AtomicBool::new(false));
+
+    // Start mic capture — keep stream alive for the process lifetime
+    let _stream = match audio::start_capture(tx_audio, shared.clone(), speaking.clone()) {
+        Ok(s) => s,
+        Err(e) => {
+            eprintln!("Failed to start audio capture: {e}");
+            std::process::exit(1);
+        }
+    };
+
+    // Spawn worker thread
+    let shared_w = shared.clone();
+    let speaking_w = speaking.clone();
+    std::thread::spawn(move || worker::run(rx_audio, rx_ctrl, tx_ui, shared_w, speaking_w));
+
+    // Run egui window — blocks until the window is closed
+    let options = eframe::NativeOptions {
+        viewport: egui::ViewportBuilder::default()
+            .with_title("Voice Assistant")
+            .with_inner_size([480.0, 700.0])
+            .with_min_inner_size([360.0, 500.0]),
+        ..Default::default()
+    };
+    eframe::run_native(
+        "Voice Assistant",
+        options,
+        Box::new(|_cc| Ok(Box::new(ui::VoiceApp::new(rx_ui, tx_ctrl)))),
+    )
 }
