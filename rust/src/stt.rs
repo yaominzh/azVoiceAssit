@@ -1,22 +1,15 @@
 use whisper_rs::{FullParams, SamplingStrategy, WhisperContext, WhisperContextParameters};
 
-use crate::config::WHISPER_MODEL_PATH;
-
 pub struct Stt {
     ctx: WhisperContext,
 }
 
 impl Stt {
-    /// Load a whisper model from the given path (falls back to `WHISPER_MODEL_PATH`).
+    /// Load a whisper model from the given path.
     pub fn load(path: &str) -> Result<Self, String> {
         let ctx = WhisperContext::new_with_params(path, WhisperContextParameters::default())
             .map_err(|e| format!("whisper load: {e:?}"))?;
         Ok(Self { ctx })
-    }
-
-    /// Load using the compile-time default model path.
-    pub fn load_default() -> Result<Self, String> {
-        Self::load(WHISPER_MODEL_PATH)
     }
 
     /// Transcribe 16 kHz mono f32 audio. Returns trimmed text or empty string.

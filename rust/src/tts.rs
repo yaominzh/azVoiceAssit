@@ -7,17 +7,11 @@ pub fn build_tts_body(text: &str) -> Value {
     json!({ "text": text })
 }
 
-/// Fetch wav bytes from the TTS service and block until playback finishes.
+/// Fetch wav bytes from the TTS service and play them, polling `stop_flag` every
+/// 50 ms (and `rx_ctrl` for `ControlMsg::Stop`) to allow interruption mid-playback.
 ///
 /// rodio 0.22.x API: DeviceSinkBuilder::open_default_sink() -> MixerDeviceSink,
 /// Player::connect_new(mixer) -> Player, Decoder::try_from(cursor) -> Result.
-pub fn speak(client: &reqwest::blocking::Client, text: &str) -> Result<(), String> {
-    let stop = AtomicBool::new(false);
-    let (_, rx_dummy) = crossbeam_channel::bounded::<crate::events::ControlMsg>(1);
-    speak_stoppable(client, text, &stop, &rx_dummy)
-}
-
-/// Like `speak`, but polls `stop_flag` every 50 ms and returns early if set.
 /// Also drains `rx_ctrl` on each poll tick: a `ControlMsg::Stop` sets the flag
 /// and stops playback immediately; other messages are silently dropped here and
 /// will be re-processed on the next worker loop iteration (they won't arrive

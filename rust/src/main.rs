@@ -35,16 +35,15 @@ fn main() -> eframe::Result<()> {
         }
         _ => {}
     }
-    match client
+    // TTS service: GET / returns 404 (no root route), so only treat a connection
+    // failure as "not reachable" — a response of any status means the server is up.
+    if let Err(e) = client
         .get("http://127.0.0.1:8123/")
         .timeout(std::time::Duration::from_secs(5))
         .send()
     {
-        Err(e) => {
-            eprintln!("TTS service not reachable at :8123: {e}");
-            std::process::exit(1);
-        }
-        _ => {}
+        eprintln!("TTS service not reachable at :8123: {e}");
+        std::process::exit(1);
     }
 
     // Channels
@@ -82,10 +81,10 @@ fn main() -> eframe::Result<()> {
         "Voice Assistant",
         options,
         Box::new(move |cc| {
-            let mut style = (*cc.egui_ctx.style()).clone();
+            let mut style = (*cc.egui_ctx.global_style()).clone();
             style.visuals.panel_fill = egui::Color32::from_rgb(0x0B, 0x10, 0x20);
             style.visuals.window_fill = egui::Color32::from_rgb(0x0B, 0x10, 0x20);
-            cc.egui_ctx.set_style(style);
+            cc.egui_ctx.set_global_style(style);
             Ok(Box::new(ui::VoiceApp::new(rx_ui, tx_ctrl)))
         }),
     )
