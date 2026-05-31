@@ -20,10 +20,12 @@ pub fn start_capture(
         .default_input_device()
         .ok_or_else(|| "no default input device".to_string())?;
 
+    // Use Default buffer size — Fixed(512) is not universally supported by macOS CoreAudio.
+    // The chunking loop below still delivers exactly FRAME-sized slices to the VAD.
     let config = cpal::StreamConfig {
         channels: 1,
         sample_rate: SAMPLE_RATE,
-        buffer_size: cpal::BufferSize::Fixed(FRAME as u32),
+        buffer_size: cpal::BufferSize::Default,
     };
 
     let mut chunk_buf: Vec<f32> = Vec::with_capacity(FRAME * 2);
