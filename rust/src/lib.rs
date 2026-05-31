@@ -5,6 +5,7 @@ pub mod history;
 pub mod refine;
 pub mod segmenter;
 pub mod state;
+pub mod stt;
 pub mod timing;
 pub mod tts;
 pub mod vad;

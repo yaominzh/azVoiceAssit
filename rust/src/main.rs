@@ -5,6 +5,7 @@ mod history;
 mod refine;
 mod segmenter;
 mod state;
+mod stt;
 mod timing;
 mod tts;
 mod vad;
