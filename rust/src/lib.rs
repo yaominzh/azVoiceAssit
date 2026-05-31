@@ -5,3 +5,4 @@ pub mod refine;
 pub mod segmenter;
 pub mod state;
 pub mod timing;
+pub mod tts;
