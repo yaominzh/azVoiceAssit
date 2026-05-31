@@ -81,7 +81,6 @@ pub fn run(
             Ok(e) => e,
             Err(e) => { eprintln!("[worker] VAD error: {e}"); vad.reset(); continue; }
         };
-
         // Segmenter
         let utterance = match seg.push(frame, event) {
             Some(u) => u,

@@ -3,9 +3,16 @@ use ort::{session::Session, value::Tensor};
 use crate::segmenter::VadEvent;
 use crate::config::{FRAME, SAMPLE_RATE, MIN_SILENCE_MS, SPEECH_THRESHOLD};
 
+/// Silero v5 maintains a context window: each 512-sample frame must be prefixed
+/// with the previous 64 samples (→ 576-sample model input). The torch model does
+/// this internally; the ONNX caller must do it explicitly, or speech probability
+/// stays ~0. (Confirmed: bare 512 → prob 0.0016; with 64-sample context → 0.9999.)
+const CTX: usize = 64;
+
 pub struct Vad {
     session: Session,
     state: Array3<f32>,        // [2, 1, 128] recurrent state
+    context: Vec<f32>,         // last CTX samples of the previous frame
     silence_frames: u32,       // consecutive silent frames counter
     speech_active: bool,
 }
@@ -19,6 +26,7 @@ impl Vad {
         Ok(Self {
             session,
             state: Array3::zeros([2, 1, 128]),
+            context: vec![0.0; CTX],
             silence_frames: 0,
             speech_active: false,
         })
@@ -27,9 +35,13 @@ impl Vad {
     /// Feed one FRAME of audio. Returns Some(Start) when speech begins,
     /// Some(End) after MIN_SILENCE_MS of silence post-speech, None otherwise.
     pub fn accept(&mut self, frame: &[f32]) -> Result<Option<VadEvent>, String> {
-        // Build owned tensors (required when passing named inputs via inputs! macro)
+        // Prepend the 64-sample context to the 512-sample frame → 576-sample input.
+        let mut input_vec = Vec::with_capacity(CTX + frame.len());
+        input_vec.extend_from_slice(&self.context);
+        input_vec.extend_from_slice(frame);
+        let in_len = input_vec.len();
         let audio = Tensor::<f32>::from_array(
-            Array2::from_shape_vec([1, FRAME], frame.to_vec())
+            Array2::from_shape_vec([1, in_len], input_vec)
                 .map_err(|e| format!("audio shape: {e}"))?,
         )
         .map_err(|e| format!("audio tensor: {e}"))?;
@@ -69,6 +81,9 @@ impl Vad {
             .expect("state is contiguous")
             .copy_from_slice(state_slice);
 
+        // Carry the last CTX samples of this frame as context for the next call.
+        self.context = frame[frame.len() - CTX..].to_vec();
+
         // Silence threshold in frames
         let silence_threshold = (MIN_SILENCE_MS as f32 / 1000.0
             * SAMPLE_RATE as f32
@@ -94,6 +109,7 @@ impl Vad {
 
     pub fn reset(&mut self) {
         self.state = Array3::zeros([2, 1, 128]);
+        self.context = vec![0.0; CTX];
         self.silence_frames = 0;
         self.speech_active = false;
     }
