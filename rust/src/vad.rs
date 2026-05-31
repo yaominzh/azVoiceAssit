@@ -74,8 +74,6 @@ impl Vad {
             * SAMPLE_RATE as f32
             / FRAME as f32) as u32;
 
-        if prob > 0.1 { eprintln!("[vad] prob={:.3}", prob); }
-
         // State machine
         if prob >= SPEECH_THRESHOLD {
             self.silence_frames = 0;
