@@ -22,14 +22,18 @@ fn pick_capture_rate(device: &cpal::Device) -> Result<u32, String> {
         .ok_or_else(|| "no input configs".into())
 }
 
-/// Linear downsampler: drops samples to go from `src_rate` to `dst_rate`.
+/// Linear interpolation resampler: avoids aliasing from point-sampling.
+/// Handles non-integer ratios correctly (e.g. 44100→16000 = 2.75625×).
 fn downsample(buf: &[f32], src_rate: u32, dst_rate: u32) -> Vec<f32> {
     if src_rate == dst_rate { return buf.to_vec(); }
     let ratio = src_rate as f64 / dst_rate as f64;
     let out_len = ((buf.len() as f64) / ratio) as usize;
     (0..out_len).map(|i| {
-        let src_idx = (i as f64 * ratio) as usize;
-        buf[src_idx.min(buf.len() - 1)]
+        let pos = i as f64 * ratio;
+        let lo = pos.floor() as usize;
+        let hi = (lo + 1).min(buf.len() - 1);
+        let t = (pos - pos.floor()) as f32;
+        buf[lo] * (1.0 - t) + buf[hi] * t
     }).collect()
 }
 
