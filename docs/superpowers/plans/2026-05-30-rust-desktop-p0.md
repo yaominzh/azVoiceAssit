@@ -577,39 +577,54 @@ git commit -m "feat: rust oMLX refine client (body builder tested)"
 - [ ] **Step 1: Create `tts_service/requirements.txt`**
 
 ```
-mlx-audio
+mlx_audio
 fastapi
 uvicorn
-soundfile
 ```
+(Verified install: `pip install mlx_audio fastapi uvicorn`. `soundfile` is only needed if you switch to the in-memory `generate_voice_design` fallback.)
 
-- [ ] **Step 2: Create `tts_service/server.py`** (persistent; loads the model once. **Confirm the mlx-audio generate API** — the call below is the documented shape; adapt to the installed version if it differs, and report the exact call used.)
+- [ ] **Step 2: Create `tts_service/server.py`** — **API VERIFIED via spike (2026-05-30):**
+  - Model: `mlx-community/Qwen3-TTS-12Hz-1.7B-VoiceDesign-8bit` (instruct-based; no preset speaker needed).
+  - `generate_audio(...)` writes a file (returns `None`); pass `stt_model=None` to skip an unneeded ~1.5 GB whisper download; output lands at `<output_path>/<file_prefix>_000.wav`; audio is 24 kHz mono.
+  - **Persistence:** call `load_model(path)` ONCE at startup and pass the loaded module as `model=` to `generate_audio` so it is not reloaded per request. (Confirm at impl: if passing the Module doesn't reuse it, fall back to the lower-level `model.generate_voice_design(text=..., instruct=...)` which returns audio samples.)
 
 ```python
-"""Persistent Qwen3-TTS server (MLX-Audio). POST /tts {"text": "..."} -> audio/wav."""
-import io
-import soundfile as sf
+"""Persistent Qwen3-TTS server (MLX-Audio). POST /tts {"text": "..."} -> audio/wav.
+
+Verified working: mlx_audio + Qwen3-TTS VoiceDesign-8bit on Apple Silicon,
+~2x realtime, ~6GB peak RAM. Run: uvicorn server:app --port 8123
+"""
+import glob
+import os
+import tempfile
 from fastapi import FastAPI
 from fastapi.responses import Response
 from pydantic import BaseModel
-from mlx_audio.tts.generate import generate_audio  # confirm import path for installed version
+from mlx_audio.tts.utils import load_model
+from mlx_audio.tts.generate import generate_audio
 
-MODEL = "mlx-community/Qwen3-TTS-12Hz-1.7B-CustomVoice"  # confirm available MLX repo id
-SAMPLE_RATE = 24000
+MODEL_PATH = "mlx-community/Qwen3-TTS-12Hz-1.7B-VoiceDesign-8bit"
+INSTRUCT = "a warm, clear voice, calm and natural"
 
 app = FastAPI()
+model = load_model(MODEL_PATH)   # loaded once at startup (heavy)
 
 class Req(BaseModel):
     text: str
 
 @app.post("/tts")
 def tts(req: Req):
-    # generate_audio returns a numpy float array (confirm signature/return for version)
-    audio = generate_audio(text=req.text, model=MODEL)
-    buf = io.BytesIO()
-    sf.write(buf, audio, SAMPLE_RATE, format="WAV")
-    return Response(content=buf.getvalue(), media_type="audio/wav")
+    with tempfile.TemporaryDirectory() as d:
+        generate_audio(text=req.text, model=model, instruct=INSTRUCT,
+                       stt_model=None, output_path=d, file_prefix="o",
+                       audio_format="wav", save=True, verbose=False)
+        wav = sorted(glob.glob(os.path.join(d, "o*.wav")))[0]
+        with open(wav, "rb") as f:
+            data = f.read()
+    return Response(content=data, media_type="audio/wav")
 ```
+
+> Memory note: Qwen3-TTS peaks ~6 GB; it runs alongside oMLX's gemma — ensure enough RAM, or use a smaller oMLX model.
 
 - [ ] **Step 3: Run the service + curl smoke test**
 
