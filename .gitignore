@@ -3,3 +3,6 @@ __pycache__/
 *.pyc
 .DS_Store
 .superpowers/
+rust/target/
+rust/models/
+tts_service/.venv/
