@@ -1,3 +1,4 @@
+pub mod audio;
 pub mod config;
 pub mod events;
 pub mod history;
@@ -6,3 +7,4 @@ pub mod segmenter;
 pub mod state;
 pub mod timing;
 pub mod tts;
+pub mod vad;
