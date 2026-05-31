@@ -48,10 +48,32 @@ pub fn run(
             }
         }
 
-        // Get next audio frame
-        let frame = match rx_audio.recv() {
-            Ok(f) => f,
-            Err(_) => return,
+        // Get next audio frame — but also wake on ctrl so mute→unmute works.
+        // When muted, no audio arrives and rx_audio.recv() would block forever,
+        // deadlocking control messages. select! handles either channel.
+        let frame = crossbeam_channel::select! {
+            recv(rx_ctrl) -> msg => {
+                match msg {
+                    Ok(ControlMsg::ToggleMic) => {
+                        if let Some(s) = shared.toggle_mic() {
+                            let _ = tx_ui.send(UiEvent::StateChanged(s));
+                        }
+                    }
+                    Ok(ControlMsg::Clear) => {
+                        history.clear();
+                        let _ = tx_ui.send(UiEvent::Cleared);
+                    }
+                    Ok(ControlMsg::Stop) => {
+                        stop_tts.store(true, Ordering::SeqCst);
+                    }
+                    Err(_) => return,
+                }
+                continue;
+            }
+            recv(rx_audio) -> frame => match frame {
+                Ok(f) => f,
+                Err(_) => return,
+            }
         };
 
         // VAD
