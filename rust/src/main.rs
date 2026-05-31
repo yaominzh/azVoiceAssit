@@ -1,5 +1,6 @@
 mod audio;
 mod config;
+mod settings;
 mod events;
 mod history;
 mod refine;

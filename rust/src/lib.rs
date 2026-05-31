@@ -1,5 +1,6 @@
 pub mod audio;
 pub mod config;
+pub mod settings;
 pub mod events;
 pub mod history;
 pub mod refine;
