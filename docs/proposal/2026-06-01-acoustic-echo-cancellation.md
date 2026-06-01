@@ -1,7 +1,7 @@
 # Proposal: Acoustic Echo Cancellation (AEC) for Full-Duplex Voice
 
-**Date:** 2026-06-01  
-**Status:** Proposal — pending review and approval  
+**Date:** 2026-06-01 (rev 2 — incorporates third-party review)
+**Status:** Proposal — revised, pending approval  
 **Author:** brainstorming session (Allen + Claude)  
 **Repo:** `feat/rust-ui-polish-settings` branch (Rust desktop app)
 
@@ -11,193 +11,258 @@
 
 When the assistant plays its TTS response through the speaker, the microphone picks up
 that audio. The VAD (Silero) fires on it, the STT transcribes the app's own words, and
-the assistant tries to "refine" its own output — creating a feedback loop. Example: app
-says *"The meeting is tomorrow"*, mic hears it, app transcribes *"The meeting is
-tomorrow"*, sends it back to oMLX, and responds again.
+the assistant "refines" its own output — a feedback loop. Example: app says *"The meeting
+is tomorrow"* → mic hears it → app transcribes it → sends back to oMLX → responds again.
 
-**Current workaround:** a half-duplex `speaking` flag that mutes the mic while TTS is
-playing. This breaks down at the reverb *tail* — the moment TTS ends, the flag clears
-but the room still rings for 200–800 ms, and that reverb triggers VAD.
+**Current workaround:** a half-duplex `speaking: Arc<AtomicBool>` flag that mutes the mic
+while TTS is playing. It breaks down at the reverb *tail* — the moment TTS ends, the flag
+clears but the room still rings for 200–800 ms and that reverb triggers VAD.
 
 ---
 
-## Proposed Solution: Full-Duplex Acoustic Echo Cancellation
+## Goal
 
-Replace the half-duplex mute gate with a real-time AEC engine that sits between the
-microphone and the VAD. The AEC receives two inputs:
-
-1. **Reference signal** — the TTS PCM that was sent to the speaker (what we *want* to
-   cancel)
-2. **Captured signal** — what the microphone actually recorded (user speech + echo of
-   TTS)
-
-The AEC outputs a **clean signal** with the TTS echo subtracted. This clean signal feeds
-the VAD and STT pipeline, so neither the TTS audio nor its room reverb ever triggers a
-turn.
-
-### Architecture Overview
-
-```
-Qwen3-TTS HTTP response
-    │
-    ▼
-WAV bytes → decode PCM → resample to 16 kHz
-                              │
-                              ▼ reference frames (pushed by TTS thread)
-                     ┌────────────────────────────┐
-                     │   EchoCancel               │
-                     │   (Arc<Mutex<SpeexEcho>>)  │
-                     └────────────────────────────┘
-                              ▲ mic frames (16 kHz, from cpal callback)
-                              │
-                              ▼ cancelled clean frames
-                         VAD → STT → Refine → TTS
-```
-
-The `EchoCancel` object is shared between two threads:
-- **TTS thread** — feeds reference PCM frames as playback progresses
-- **Audio callback** — passes every mic frame through the canceller before it reaches
-  the worker pipeline
+Eliminate TTS-triggered false turns, both during playback and during the reverb tail,
+without breaking the current half-duplex flow. True full-duplex barge-in (user speaks
+while app speaks) is a separate, later goal that depends on a worker architecture change
+not in scope here.
 
 ---
 
 ## Options Considered
 
-### Option A — Post-TTS mute extension *(rejected as primary)*
-After TTS ends, keep the mic muted for a configurable window (e.g. 500–1500 ms) to let
-the reverb die down before re-enabling VAD.
+### Option A — Post-TTS mute extension *(useful but insufficient)*
+Keep the mic muted for an additional configurable window (e.g. 500–1500 ms) after TTS ends
+to let the reverb die down before re-enabling VAD.
 
-**Pros:** zero new dependencies, one-liner change.  
-**Cons:** fixed trade-off — too short = echo leaks through; too long = user has to wait
-before speaking. Does not enable full-duplex or barge-in.
+**Pros:** zero new deps, one-liner.  
+**Cons:** fixed trade-off — too short = echo leaks; too long = user must wait. Does not
+help during playback if the mute gate fails. Not a permanent solution.  
+**Role in this plan:** still valuable as a safety net (Phase 0, already available via
+Settings silence_ms), but not the primary fix.
 
-### Option B — Echo fingerprinting / content filter *(rejected as primary)*
-Store the last 1–3 refined texts the app just spoke. If the next STT output closely
-matches a stored text (string similarity), discard the turn.
+### Option B — Echo fingerprinting / content filter *(belt-and-suspenders only)*
+Store the last 1–3 refined texts the app spoke. If the next STT output closely matches,
+discard the turn.
 
-**Pros:** no audio processing, runs after STT.  
-**Cons:** STT still runs (wasted compute), fuzzy matching isn't reliable, doesn't help
-with barge-in.
+**Pros:** no audio processing.  
+**Cons:** STT still runs (wasted compute), fuzzy matching unreliable, doesn't help
+during playback, doesn't generalize.  
+**Role:** optional add-on in a later phase; not the primary fix.
 
-### Option C — Full AEC *(selected)*
-Real-time AEC via `speexdsp` (Speex DSP library). Cancels the TTS echo from the mic
-signal in real time, enabling full-duplex operation.
-
-**Pros:** solves the problem correctly and permanently; foundation for barge-in.  
-**Cons:** new native dependency (`speexdsp`), more implementation complexity, timing
-synchronization between TTS playback and reference feeding.
+### Option C — Phased AEC *(selected)*
+Real-time AEC via `speexdsp`. Cancels TTS echo from the mic signal using the TTS PCM as
+a reference. Implemented in phases so each phase is provable before the next.
 
 ---
 
-## Technical Design
+## Phased Implementation Plan
+
+The reviewer's phased approach is correct and accepted in full:
+
+| Phase | What | Speaking gate | VAD during TTS |
+|-------|------|--------------|----------------|
+| 0 | Post-TTS tail mute (Settings slider) | kept | no (current) |
+| 1 | **AEC shadow mode** — wire reference + capture, measure | kept | no (current) |
+| 2 | AEC feedback prevention — relax gate after proven stable | optional | no (current) |
+| 3 | Worker restructure — concurrent TTS + VAD consumer | removed | **yes** |
+| 4 | Barge-in — detected user speech triggers `stop_tts` | — | yes |
+
+**This spec covers Phase 1 only.** Phases 2–4 have their own spec/plan cycles.
+
+---
+
+## Phase 1 — AEC Shadow Mode: Technical Design
+
+### What Phase 1 does
+
+Wire the Speex AEC engine so it receives both the TTS reference PCM and the mic signal,
+and produces a cancellation output. **The existing `speaking` gate is kept active.** The
+AEC output is logged/measured but not yet used in the VAD path. This lets us validate
+cancellation quality, timing alignment, and callback behaviour before touching the live
+pipeline.
+
+### Architecture
+
+```
+Qwen3-TTS WAV bytes
+    │
+    ▼
+decode PCM → resample to 16 kHz (or configure TTS to output 16 kHz)
+                     │ reference frames
+                     ▼
+            ┌─────────────────────────────────────────┐
+            │   EchoCancel  (Arc + lock-free design)   │
+            └─────────────────────────────────────────┘
+                     ▲ mic frames (after gate; from processing thread)
+                     │ cancelled frames (logged, not yet fed to VAD)
+                     ▼
+            [measurement / log only — Phase 1]
+            [VAD still receives raw frames via existing path]
+```
 
 ### New file: `rust/src/echo.rs`
 
 ```rust
 pub struct EchoCancel {
-    state: speexdsp::echo::SpeexEcho,
+    state: SpeexEchoState,   // speexdsp internal (i16-based API)
     frame_size: usize,
+    filter_length: usize,
+    reference_buf: VecDeque<i16>,  // pre-queued reference frames
 }
 
 impl EchoCancel {
-    pub fn new(frame_size: usize, filter_length: usize) -> Self { ... }
+    pub fn new(frame_size: usize, filter_length: usize) -> Result<Self, String>;
 
-    /// Called by TTS thread: feed the PCM that was just played to the speaker.
-    pub fn push_reference(&mut self, frame: &[f32]) { ... }
+    /// Feed TTS PCM that was just played to the speaker (far-end reference).
+    /// Called from TTS thread. Lock-free: pushes to an internal queue.
+    pub fn push_reference(&self, frame: &[i16]);
 
-    /// Called by audio callback: cancel echo from mic frame, return clean signal.
-    pub fn process(&mut self, mic: &[f32]) -> Vec<f32> { ... }
+    /// Process one mic frame (near-end). Returns echo-cancelled output.
+    /// Called from the audio-processing thread (NOT the cpal callback).
+    pub fn process(&mut self, mic: &[i16]) -> Vec<i16>;
+
+    /// Call when TTS stops (Stop button or natural end) to flush stale reference.
+    pub fn reset_reference(&mut self);
 }
 ```
 
-The object is wrapped in `Arc<Mutex<EchoCancel>>` and shared between the TTS thread
-and the audio callback thread.
-
-### Changes to `tts.rs`
-
-After receiving the WAV bytes from Qwen3-TTS:
-1. Decode the WAV PCM (24 kHz mono from the TTS service)
-2. Resample from 24 kHz → 16 kHz (same linear interpolation used in `audio.rs`)
-3. Feed the resampled frames to `echo.push_reference()` in sync with rodio playback
-
-The `speak_stoppable` function gains an `Arc<Mutex<EchoCancel>>` parameter.
-
-### Changes to `audio.rs`
-
-- Remove the `speaking: Arc<AtomicBool>` gate
-- Accept `Arc<Mutex<EchoCancel>>` instead
-- In the callback: `let clean = echo.lock().unwrap().process(&frame);` — feed clean
-  frame to the worker instead of raw mic frame
-
-### Changes to `worker.rs`
-
-- Create `EchoCancel` at startup, wrap in `Arc<Mutex<_>>`
-- Pass it to both `start_capture()` and `speak_stoppable()`
-- Remove `speaking` AtomicBool and the mute gate logic
-
-### New dependency
-
-```toml
-speexdsp = "0.2"   # or latest — wraps libspeexdsp
+**f32 ↔ i16 conversion** (speexdsp uses i16 PCM):
+```rust
+fn f32_to_i16(samples: &[f32]) -> Vec<i16> {
+    samples.iter().map(|&x| (x.clamp(-1.0, 1.0) * 32767.0) as i16).collect()
+}
+fn i16_to_f32(samples: &[i16]) -> Vec<f32> {
+    samples.iter().map(|&x| x as f32 / 32767.0).collect()
+}
 ```
 
-**Setup prerequisite:** `brew install speexdsp` (macOS).
+### Real-time safety: AEC outside the cpal callback
 
-### AEC parameters
+**The cpal audio callback must remain lock-free.** The callback only pushes raw f32 frames
+to the existing `tx_audio` channel (unchanged). A new **audio-processing thread** sits
+between the channel and the worker: it pulls frames, runs them through AEC, and forwards
+the output to a second channel that the worker reads. In Phase 1, both the raw and
+cancelled frames are forwarded so the existing VAD path is unaffected.
 
-| Parameter | Value | Notes |
-|-----------|-------|-------|
-| `frame_size` | 512 samples | Matches our VAD frame at 16 kHz (~32 ms) |
-| `filter_length` | 2048 samples | ~128 ms tail coverage — handles typical room reverb |
-| Input rate | 16 kHz | Both mic and reference resampled to 16 kHz |
+```
+cpal callback → tx_raw → [audio-processing thread] → AEC → tx_cancelled
+                                                          ↘ tx_raw (for VAD, unchanged)
+```
 
-`speexdsp`'s AEC includes internal delay estimation, so it tolerates the small
-acoustic delay (speaker → mic, typically <50 ms) automatically.
+This removes all locking from the hot callback path.
+
+### Ownership: `EchoCancel` created in `main.rs`
+
+`main.rs` creates `EchoCancel`, wraps it in `Arc`, and passes a clone to:
+- `audio::start_processing_thread(...)` (new)
+- `worker::run(...)` (which passes it into `tts::speak_stoppable(...)`)
+
+```rust
+// main.rs
+let echo = Arc::new(EchoCancel::new(FRAME, FILTER_LENGTH)?);
+let _processing_thread = audio::start_processing_thread(rx_raw, tx_cancelled, echo.clone());
+std::thread::spawn(move || worker::run(rx_cancelled, rx_ctrl, tx_ui, shared, speaking, echo));
+```
+
+### TTS reference feeding and timing
+
+The proposal's original timing approach was under-specified. The revised approach:
+
+1. Qwen3-TTS is configured to output **16 kHz mono WAV** directly (eliminating the
+   resampling quality risk for the reference signal). Update `tts_service/server.py` to
+   use `SAMPLE_RATE = 16000`.
+2. In `tts::speak_stoppable()`, after fetching WAV bytes and before handing to rodio:
+   - Decode raw PCM from the WAV
+   - Split into `FRAME`-sized chunks
+   - Push each chunk to `echo.push_reference(chunk)` sequentially
+3. The reference is pushed just before playback starts. Speex handles the residual
+   speaker-to-mic delay (typically <50 ms) within its internal buffer.
+
+**On Stop** (user presses Stop or `stop_flag` fires):
+```rust
+echo.reset_reference();  // flush stale reference, reset canceller state
+```
+
+### Filter length
+
+The problem states reverb tail of 200–800 ms. Filter lengths and their coverage:
+
+| Filter samples | Coverage at 16 kHz | Notes |
+|---------------|-------------------|-------|
+| 2048 | ~128 ms | Too short for problem statement |
+| 4096 | ~256 ms | Covers most desktop setups |
+| 8192 | ~512 ms | Conservative, higher CPU |
+| 16000 | ~1000 ms | Maximum sensible |
+
+**Default: 4096** (tunable; not exposed to users in Phase 1, configurable in code).
+Empirically validated during Phase 1 acceptance tests.
+
+### AEC API and sample format
+
+The `speexdsp` Rust crate uses **i16 PCM**. The proposal's f32 interface was aspirational;
+the implementation wraps the conversion. **Verify the actual crate API before coding**
+(the Rust wrapper may differ from the C API documentation).
+
+### Setup prerequisite (updated for Apple Silicon)
+
+```bash
+brew install speexdsp pkg-config
+# Apple Silicon may also need:
+export PKG_CONFIG_PATH=/opt/homebrew/lib/pkgconfig
+```
+
+Document in `docs/SETUP.md`. Confirm static vs. dynamic linking in `Cargo.toml`.
+
+### What is NOT in Phase 1
+
+- AEC output used in the VAD/STT path (Phase 2)
+- Removal of `speaking` gate (Phase 2)
+- User-mutable mic toggle behaviour changed (unchanged)
+- Worker restructuring for concurrent TTS + VAD (Phase 3)
+- Barge-in (Phase 4)
 
 ---
 
-## What This Enables
+## Acceptance Criteria (Phase 1)
 
-1. **No more TTS feedback loop** — the AEC cancels both playback audio and its reverb
-   tail. The `speaking` flag workaround is no longer needed.
-2. **Foundation for barge-in** — with echo-clean audio reaching the VAD at all times,
-   the user can speak while the app is speaking and VAD will correctly fire on their
-   voice. *Note: interrupting TTS playback on barge-in is a separate concern (already
-   have `TtsPlayer.stop()`); this proposal solves the signal side.*
-3. **Better latency feel** — no more mandatory silence window after TTS; user can
-   respond immediately.
+Phase 1 is complete when all of the following pass:
+
+| Test | Expected |
+|------|----------|
+| **TTS-only no-trigger** | Play 10 assistant utterances at normal volume, no user speech → 0 completed VAD/STT turns |
+| **Tail test** | After TTS stops, verify no VAD trigger for 1 s of room decay |
+| **Reference alignment** | Log AEC cancellation ratio (or ERLE) during TTS; confirm positive cancellation (not zero) |
+| **Callback safety** | No audio dropouts, no xrun events, callback processing time <1 ms |
+| **Stop edge case** | Press Stop mid-playback; no stale reference suppresses subsequent user speech |
+| **Fallback** | If AEC init fails (e.g. speexdsp not installed), app still runs with existing `speaking` gate |
+| **Filter length** | Measure at 2048/4096/8192 samples; select minimum that achieves no-trigger on tail test |
+| **Device matrix** | Passes on: AirPods (24 kHz captured mic), External Microphone (44.1 kHz), DJI Mic Mini (16 kHz native) |
 
 ---
 
-## Risks and Mitigations
+## Revised Risks
 
 | Risk | Mitigation |
 |------|-----------|
-| `speexdsp` crate API differences | Verify at build time; document actual API used |
-| Timing misalignment (reference vs capture) | AEC internal delay estimation handles <100ms misalignment; test with varying speaker-mic distances |
-| `Arc<Mutex<>>` contention | Lock held only for ~1ms per 32ms frame; contention negligible |
-| brew dependency on macOS | Document in SETUP.md; one-time install |
-| AEC degrades at very high volume or clipping | Qwen3-TTS output is normalized; mic AGC is macOS-handled |
+| speexdsp Rust API differs from proposal | Verify crate API before starting Phase 1 implementation |
+| Reference/capture timing misalignment | Shadow mode lets us measure and tune before going live |
+| Mutex contention on AEC state | Architecture uses lock-free queue for reference; Mutex only in processing thread |
+| cpal callback safety | AEC moved to processing thread; callback remains lock-free |
+| Resampling degrades reference quality | Configure TTS to output 16 kHz directly (no reference resampling) |
+| Speex does not fully cancel 200–800 ms tail | Start at 4096; measure; use 8192/16000 if needed |
+| brew/pkg-config setup complexity | Documented; fallback to existing gate if library unavailable |
+| macOS AGC interferes with AEC | Monitor near-end clipping; keep TTS volume moderate; test across devices |
 
 ---
 
-## Open Questions for Review
+## Open Questions (carried forward for Phase 2 decision)
 
-1. Is `speexdsp` the right library, or should we use `webrtc-audio-processing` (heavier
-   but self-contained, no brew dependency)?
-2. Should barge-in (interrupt TTS on user speech detection) be in scope for this phase,
-   or follow-on?
-3. The filter length (2048 = 128 ms) — is this sufficient for the room/speaker setup
-   being used? May need tuning.
-4. Should the AEC filter length be exposed as a Settings knob?
-
----
-
-## Estimated Effort
-
-- `echo.rs` + `speexdsp` wiring: 1 day
-- `tts.rs` reference feeding + timing: 1 day  
-- `audio.rs` / `worker.rs` / `main.rs` wiring + removing the old mute gate: 0.5 day
-- Testing and tuning AEC filter parameters: 0.5–1 day
-
-**Total: 3–4 days**
+1. **Phase 2 trigger:** what metric from Phase 1 shadow logs qualifies as "proven stable"
+   enough to relax the `speaking` gate?
+2. **`webrtc-audio-processing` vs `speexdsp`:** if shadow mode shows inadequate
+   cancellation quality, should we switch?
+3. **Phase 3 worker architecture:** TTS on separate thread, or dedicated VAD-consumer
+   thread? (Separate spec when Phase 2 is complete.)
+4. **Resampler quality:** if Qwen3-TTS cannot output 16 kHz, should we use `rubato`
+   instead of our existing linear interpolation?
