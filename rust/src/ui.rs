@@ -201,10 +201,11 @@ impl eframe::App for VoiceApp {
                     ui.add_space(6.0);
                     ui.label(egui::RichText::new(format!("Silence timeout: {} ms", self.draft.silence_ms))
                         .size(11.0).color(egui::Color32::from_gray(160)));
-                    ui.add(egui::Slider::new(&mut self.draft.silence_ms, 300_u32..=2000).show_value(false));
+                    ui.add(egui::Slider::new(&mut self.draft.silence_ms, 300_u32..=5000).show_value(false));
                     ui.add_space(4.0);
                     ui.label(egui::RichText::new(format!("Speech threshold: {:.2}", self.draft.speech_threshold))
-                        .size(11.0).color(egui::Color32::from_gray(160)));
+                        .size(11.0).color(egui::Color32::from_gray(160)))
+                        .on_hover_text("How confident the VAD must be before starting a turn.\n0.5 = Silero default. Lower = more sensitive (picks up quiet speech,\nmore false triggers). Higher = stricter (misses faint speech).");
                     ui.add(egui::Slider::new(&mut self.draft.speech_threshold, 0.1_f32..=0.9_f32).show_value(false));
                     ui.add_space(6.0);
                     ui.horizontal(|ui| {

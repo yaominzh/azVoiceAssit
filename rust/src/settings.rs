@@ -19,7 +19,7 @@ impl Default for AppSettings {
 
 impl AppSettings {
     pub fn validate(mut self) -> Self {
-        self.silence_ms = self.silence_ms.clamp(300, 2000);
+        self.silence_ms = self.silence_ms.clamp(300, 5000);
         self.speech_threshold = self.speech_threshold.clamp(0.1, 0.9);
         self
     }
@@ -69,7 +69,7 @@ mod tests {
             speech_threshold: 5.0,
         };
         let v = s.validate();
-        assert_eq!(v.silence_ms, 2000);
+        assert_eq!(v.silence_ms, 5000);
         assert!((v.speech_threshold - 0.9).abs() < 1e-6);
     }
 
