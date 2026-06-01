@@ -129,12 +129,31 @@ impl eframe::App for VoiceApp {
             ui.add_space(8.0);
         });
 
-        // Transcript scroll area — shrinks when settings panel is open
-        let screen_height = ui.ctx().content_rect().height();
-        let reserved = if self.show_settings { 260.0 } else { 120.0 };
-        let remaining = (screen_height - reserved).max(80.0);
+        // Controls bar + gear — rendered BEFORE the scroll area so it stays pinned
+        // at the top of the lower section regardless of transcript length.
+        ui.separator();
+        ui.horizontal(|ui| {
+            if ui.button("\u{1F3A4} Mic").clicked() {
+                let _ = self.tx_ctrl.send(ControlMsg::ToggleMic);
+            }
+            if ui.button("\u{23F9} Stop").clicked() {
+                let _ = self.tx_ctrl.send(ControlMsg::Stop);
+            }
+            if ui.button("\u{1F5D1} Clear").clicked() {
+                let _ = self.tx_ctrl.send(ControlMsg::Clear);
+            }
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                if ui.small_button("\u{2699}").clicked() {
+                    self.show_settings = !self.show_settings;
+                    if self.show_settings {
+                        self.draft = self.applied.clone(); // fresh copy on open
+                    }
+                }
+            });
+        });
+
+        // Transcript scroll area fills all remaining space below the controls
         egui::ScrollArea::vertical()
-            .max_height(remaining)
             .stick_to_bottom(true)
             .show(ui, |ui| {
                 let width = ui.available_width().min(640.0);
@@ -167,28 +186,6 @@ impl eframe::App for VoiceApp {
                     ui.add_space(4.0);
                 }
             });
-
-        // Controls bar + gear button (right-aligned)
-        ui.separator();
-        ui.horizontal(|ui| {
-            if ui.button("\u{1F3A4} Mic").clicked() {
-                let _ = self.tx_ctrl.send(ControlMsg::ToggleMic);
-            }
-            if ui.button("\u{23F9} Stop").clicked() {
-                let _ = self.tx_ctrl.send(ControlMsg::Stop);
-            }
-            if ui.button("\u{1F5D1} Clear").clicked() {
-                let _ = self.tx_ctrl.send(ControlMsg::Clear);
-            }
-            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                if ui.small_button("\u{2699}").clicked() {
-                    self.show_settings = !self.show_settings;
-                    if self.show_settings {
-                        self.draft = self.applied.clone(); // fresh copy on open
-                    }
-                }
-            });
-        });
 
         // Settings panel (appears/disappears instantly — no animation, that's egui)
         if self.show_settings {
