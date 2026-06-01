@@ -63,6 +63,8 @@ pub fn run(
                 Ok(ControlMsg::SettingsChanged(s)) => {
                     system_prompt = s.system_prompt.clone();
                     vad.set_thresholds(s.silence_ms, s.speech_threshold);
+                    // Recreate history with new cap (clears it — fresh start on settings change)
+                    history = crate::history::History::new(s.history_turns as usize * 2);
                     settings = s;
                 }
                 Err(TryRecvError::Empty) => break,
@@ -91,6 +93,7 @@ pub fn run(
                     Ok(ControlMsg::SettingsChanged(s)) => {
                         system_prompt = s.system_prompt.clone();
                         vad.set_thresholds(s.silence_ms, s.speech_threshold);
+                        history = crate::history::History::new(s.history_turns as usize * 2);
                         settings = s;
                     }
                     Err(_) => return,
@@ -130,13 +133,23 @@ pub fn run(
             continue;
         }
 
-        let messages = history.record_user_and_build(&text, &system_prompt);
+        let messages = if settings.history_turns == 0 {
+            // Stateless: send only [system + current turn] — avoids refine slowdown
+            vec![
+                serde_json::json!({"role": "system", "content": system_prompt}),
+                serde_json::json!({"role": "user", "content": text}),
+            ]
+        } else {
+            history.record_user_and_build(&text, &system_prompt)
+        };
         let t1 = std::time::Instant::now();
         let refined = match crate::refine::refine(&client, messages) {
             Ok(r) => r,
             Err(e) => { eprintln!("[worker] refine: {e}"); reset_to_idle(&shared, &tx_ui, &mut vad); continue; }
         };
-        history.record_assistant(&refined);
+        if settings.history_turns > 0 {
+            history.record_assistant(&refined);
+        }
         let refine_ms = t1.elapsed().as_millis() as u32;
         let reply_start_ms = t0.elapsed().as_millis() as u32;
 

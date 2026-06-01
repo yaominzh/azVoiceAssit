@@ -5,6 +5,10 @@ pub struct AppSettings {
     pub system_prompt: String,
     pub silence_ms: u32,
     pub speech_threshold: f32,
+    /// Number of past turns (user+assistant pairs) fed into refine as context.
+    /// 0 = stateless (fastest, no history slowdown). Default 0.
+    #[serde(default)]   // safe to add to existing saved JSON without breaking load
+    pub history_turns: u32,
 }
 
 impl Default for AppSettings {
@@ -13,6 +17,7 @@ impl Default for AppSettings {
             system_prompt: SYSTEM_PROMPT.to_string(),
             silence_ms: MIN_SILENCE_MS,
             speech_threshold: SPEECH_THRESHOLD,
+            history_turns: 0,  // stateless by default — avoids refine slowdown
         }
     }
 }
@@ -21,6 +26,7 @@ impl AppSettings {
     pub fn validate(mut self) -> Self {
         self.silence_ms = self.silence_ms.clamp(300, 5000);
         self.speech_threshold = self.speech_threshold.clamp(0.1, 0.9);
+        self.history_turns = self.history_turns.clamp(0, 20);
         self
     }
 
@@ -67,10 +73,12 @@ mod tests {
             system_prompt: "x".into(),
             silence_ms: 99_999,
             speech_threshold: 5.0,
+            history_turns: 99,
         };
         let v = s.validate();
         assert_eq!(v.silence_ms, 5000);
         assert!((v.speech_threshold - 0.9).abs() < 1e-6);
+        assert_eq!(v.history_turns, 20);
     }
 
     #[test]
@@ -79,6 +87,7 @@ mod tests {
             system_prompt: "ok".into(),
             silence_ms: 700,
             speech_threshold: 0.5,
+            history_turns: 3,
         };
         let v = s.clone().validate();
         assert_eq!(v, s);
@@ -100,6 +109,7 @@ mod tests {
             system_prompt: "Test prompt".into(),
             silence_ms: 500,
             speech_threshold: 0.6,
+            history_turns: 2,
         };
         s.save_to(&path).unwrap();
         let loaded = AppSettings::load_from(&path);

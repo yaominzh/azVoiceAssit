@@ -214,6 +214,20 @@ impl eframe::App for VoiceApp {
                     ui.add(egui::Slider::new(&mut self.draft.speech_threshold, 0.1_f32..=0.9_f32).show_value(false));
                     ui.add_space(6.0);
                     ui.horizontal(|ui| {
+                        let label = if self.draft.history_turns == 0 {
+                            "Context turns: off (stateless)".to_string()
+                        } else {
+                            format!("Context turns: {} (last {} turn{})",
+                                self.draft.history_turns, self.draft.history_turns,
+                                if self.draft.history_turns == 1 { "" } else { "s" })
+                        };
+                        ui.label(egui::RichText::new(label).size(11.0).color(egui::Color32::from_gray(160)));
+                        ui.label(egui::RichText::new("\u{2139}").size(11.0).color(egui::Color32::from_rgb(99, 102, 241)))
+                            .on_hover_text("How many past turns to include as context in each refine call.\n0 = stateless (fastest, fixes slowdown after many turns).\n1–5 = conversational context (refine can reference prior turns).\nNote: higher values make oMLX calls slower as sessions grow long.");
+                    });
+                    ui.add(egui::Slider::new(&mut self.draft.history_turns, 0_u32..=20).show_value(false));
+                    ui.add_space(6.0);
+                    ui.horizontal(|ui| {
                         if ui.button("Apply").clicked() {
                             match self.draft.save() {
                                 Ok(()) => {
