@@ -2,7 +2,7 @@ use crossbeam_channel::{Receiver, Sender, TryRecvError};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
-use crate::config::{HISTORY_MAXLEN, PREROLL_FRAMES, SILERO_MODEL_PATH, SYSTEM_PROMPT, WHISPER_MODEL_PATH, MIN_SILENCE_MS};
+use crate::config::{HISTORY_MAXLEN, PREROLL_FRAMES, SILERO_MODEL_PATH, WHISPER_MODEL_PATH};
 use crate::events::{ControlMsg, State, UiEvent};
 use crate::state::SharedState;
 use crate::timing::TurnTiming;
@@ -31,6 +31,10 @@ pub fn run(
         Ok(v) => v,
         Err(e) => { eprintln!("[worker] VAD load failed: {e}"); return; }
     };
+    // Load persisted settings (or defaults). Apply initial thresholds to VAD.
+    let mut settings = crate::settings::AppSettings::load();
+    let mut system_prompt = settings.system_prompt.clone();
+    vad.set_thresholds(settings.silence_ms, settings.speech_threshold);
     let mut seg = crate::segmenter::Segmenter::new(PREROLL_FRAMES);
     let mut history = crate::history::History::new(HISTORY_MAXLEN);
     let stt = match crate::stt::Stt::load(WHISPER_MODEL_PATH) {
@@ -56,7 +60,11 @@ pub fn run(
                 Ok(ControlMsg::Stop) => {
                     stop_tts.store(true, Ordering::SeqCst);
                 }
-                Ok(ControlMsg::SettingsChanged(_)) => {} // handled in future task
+                Ok(ControlMsg::SettingsChanged(s)) => {
+                    system_prompt = s.system_prompt.clone();
+                    vad.set_thresholds(s.silence_ms, s.speech_threshold);
+                    settings = s;
+                }
                 Err(TryRecvError::Empty) => break,
                 Err(_) => return, // channel closed
             }
@@ -80,7 +88,11 @@ pub fn run(
                     Ok(ControlMsg::Stop) => {
                         stop_tts.store(true, Ordering::SeqCst);
                     }
-                    Ok(ControlMsg::SettingsChanged(_)) => {} // handled in future task
+                    Ok(ControlMsg::SettingsChanged(s)) => {
+                        system_prompt = s.system_prompt.clone();
+                        vad.set_thresholds(s.silence_ms, s.speech_threshold);
+                        settings = s;
+                    }
                     Err(_) => return,
                 }
                 continue;
@@ -118,7 +130,7 @@ pub fn run(
             continue;
         }
 
-        let messages = history.record_user_and_build(&text, SYSTEM_PROMPT);
+        let messages = history.record_user_and_build(&text, &system_prompt);
         let t1 = std::time::Instant::now();
         let refined = match crate::refine::refine(&client, messages) {
             Ok(r) => r,
@@ -129,7 +141,7 @@ pub fn run(
         let reply_start_ms = t0.elapsed().as_millis() as u32;
 
         let timing = TurnTiming {
-            endpoint_ms: MIN_SILENCE_MS,
+            endpoint_ms: settings.silence_ms,   // was MIN_SILENCE_MS
             stt_ms,
             refine_ms,
             reply_start_ms,
