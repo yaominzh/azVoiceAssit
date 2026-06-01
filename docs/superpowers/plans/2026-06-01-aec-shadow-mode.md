@@ -6,10 +6,10 @@
 
 **Architecture:** A new `echo.rs` owns an `EchoCancel` struct wrapping `speexdsp`. A new audio-processing thread (not the cpal callback) pulls raw mic frames from the existing channel, runs them through AEC using reference PCM pushed by the TTS thread, and forwards both raw and cancelled frames to the worker. The worker keeps the existing `speaking` gate and VAD path unchanged — AEC output is logged only. The `EchoCancel` is created in `main.rs` and cloned to both the processing thread and the worker (which passes it into `speak_stoppable`).
 
-**Tech Stack:** Rust, `speexdsp = "0.1.2"` (requires `brew install speexdsp pkg-config`), `crossbeam-channel`, existing `rodio`/`cpal` pipeline. No changes to Python TTS service in this phase.
+**Tech Stack:** Rust, `aec-rs = "1.0.0"` (requires `brew install speexdsp pkg-config`), `crossbeam-channel`, existing `rodio`/`cpal` pipeline. No changes to Python TTS service in this phase.
 
 **Proposal:** `docs/proposal/2026-06-01-acoustic-echo-cancellation.md` (Phase 1)  
-**Branch:** `feat/rust-ui-polish-settings`  
+**Branch:** `feat/aec-echo-cancellation`  
 **DO NOT `git push` without checking** — push is fine (org guardrail lifted).
 
 ---
@@ -31,7 +31,7 @@ If `pkg-config` can't find speexdsp, the crate will fail to compile with a linke
 
 | File | Change |
 |------|--------|
-| `rust/Cargo.toml` | Add `speexdsp = "0.1.2"` |
+| `rust/Cargo.toml` | Add `aec-rs = "1.0.0"` |
 | `rust/src/echo.rs` | **CREATE** — `EchoCancel` struct, `push_reference`, `process`, `reset`, f32↔i16 helpers |
 | `rust/src/audio.rs` | Add `start_processing_thread` — pulls raw frames, runs AEC, forwards to worker |
 | `rust/src/tts.rs` | `speak_stoppable` gains `echo: Arc<EchoCancel>` param; pushes reference PCM to AEC; calls `reset` on stop |
@@ -744,4 +744,4 @@ git push origin feat/rust-ui-polish-settings
 - **`PKG_CONFIG_PATH` must be set on Apple Silicon** before any `cargo build`. Without it, the crate silently fails to link.
 - The **existing `speaking` gate is NOT removed** in this phase. The processing thread's AEC output is forwarded to the worker, but the gate in `audio.rs` still drops frames while speaking. This means AEC runs on mic frames between TTS utterances, cleaning up the tail — which is exactly what Phase 1 validates.
 - **`tx_processed` in main.rs**: after the restructure there are two channels (`tx_raw` from cpal, `tx_processed` from processing thread). The `tx_processed.clone()` in the processing thread call is not needed — `start_processing_thread` takes ownership of `tx_processed`; pass it directly (not a clone).
-- **Branch:** `feat/rust-ui-polish-settings`. Push is fine (org guardrail lifted).
+- **Branch:** `feat/aec-echo-cancellation`. Push is fine (org guardrail lifted).
