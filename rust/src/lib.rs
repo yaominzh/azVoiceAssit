@@ -12,3 +12,4 @@ pub mod tts;
 pub mod ui;
 pub mod vad;
 pub mod worker;
+pub mod echo;

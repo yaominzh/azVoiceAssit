@@ -12,6 +12,7 @@ mod tts;
 mod ui;
 mod vad;
 mod worker;
+mod echo;
 
 use std::sync::{Arc, atomic::AtomicBool};
 use crossbeam_channel::bounded;

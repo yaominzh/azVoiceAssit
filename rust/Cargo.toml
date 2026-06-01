@@ -15,4 +15,5 @@ reqwest = { version = "0.13", features = ["blocking", "json"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 crossbeam-channel = "0.5"
+aec-rs = "1.0.0"
 
