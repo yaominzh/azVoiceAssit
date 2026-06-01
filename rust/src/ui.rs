@@ -187,60 +187,41 @@ impl eframe::App for VoiceApp {
                 }
             });
 
-        // Settings panel (appears/disappears instantly — no animation, that's egui)
+        // Settings — floating popup window (non-modal, draggable, independent of layout).
+        // We skip .open() to avoid a double-borrow of &mut self; the Cancel button
+        // and Apply close it explicitly. The window is shown only when show_settings=true.
         if self.show_settings {
-            ui.separator();
-            ui.vertical(|ui| {
-                ui.add_space(4.0);
-                ui.label(
-                    egui::RichText::new("System Prompt")
-                        .size(11.0)
-                        .color(egui::Color32::from_gray(160)),
-                );
-                ui.add(
-                    egui::TextEdit::multiline(&mut self.draft.system_prompt)
-                        .desired_rows(4)
-                        .desired_width(f32::INFINITY),
-                );
-                ui.add_space(6.0);
-                ui.label(
-                    egui::RichText::new(
-                        format!("Silence timeout: {} ms", self.draft.silence_ms))
-                        .size(11.0)
-                        .color(egui::Color32::from_gray(160)),
-                );
-                ui.add(egui::Slider::new(
-                    &mut self.draft.silence_ms, 300_u32..=2000).show_value(false));
-                ui.add_space(4.0);
-                ui.label(
-                    egui::RichText::new(
-                        format!("Speech threshold: {:.2}", self.draft.speech_threshold))
-                        .size(11.0)
-                        .color(egui::Color32::from_gray(160)),
-                );
-                ui.add(egui::Slider::new(
-                    &mut self.draft.speech_threshold, 0.1_f32..=0.9_f32).show_value(false));
-                ui.add_space(6.0);
-                ui.horizontal(|ui| {
-                    if ui.button("Apply").clicked() {
-                        match self.draft.save() {
-                            Ok(()) => {
-                                self.applied = self.draft.clone();
-                                let _ = self.tx_ctrl.send(
-                                    ControlMsg::SettingsChanged(self.draft.clone()));
-                                self.show_settings = false;
+            egui::Window::new("Settings")
+                .resizable(false)
+                .default_width(340.0)
+                .show(ui.ctx(), |ui| {
+                    ui.label(egui::RichText::new("System Prompt").size(11.0).color(egui::Color32::from_gray(160)));
+                    ui.add(egui::TextEdit::multiline(&mut self.draft.system_prompt)
+                        .desired_rows(4).desired_width(f32::INFINITY));
+                    ui.add_space(6.0);
+                    ui.label(egui::RichText::new(format!("Silence timeout: {} ms", self.draft.silence_ms))
+                        .size(11.0).color(egui::Color32::from_gray(160)));
+                    ui.add(egui::Slider::new(&mut self.draft.silence_ms, 300_u32..=2000).show_value(false));
+                    ui.add_space(4.0);
+                    ui.label(egui::RichText::new(format!("Speech threshold: {:.2}", self.draft.speech_threshold))
+                        .size(11.0).color(egui::Color32::from_gray(160)));
+                    ui.add(egui::Slider::new(&mut self.draft.speech_threshold, 0.1_f32..=0.9_f32).show_value(false));
+                    ui.add_space(6.0);
+                    ui.horizontal(|ui| {
+                        if ui.button("Apply").clicked() {
+                            match self.draft.save() {
+                                Ok(()) => {
+                                    self.applied = self.draft.clone();
+                                    let _ = self.tx_ctrl.send(ControlMsg::SettingsChanged(self.draft.clone()));
+                                    self.show_settings = false;
+                                }
+                                Err(e) => eprintln!("Settings save failed: {e}"),
                             }
-                            Err(e) => eprintln!("Settings save failed: {e}"),
                         }
-                    }
-                    if ui.button("Defaults").clicked() {
-                        self.draft = AppSettings::default();
-                    }
-                    if ui.button("Cancel").clicked() {
-                        self.show_settings = false;
-                    }
+                        if ui.button("Defaults").clicked() { self.draft = AppSettings::default(); }
+                        if ui.button("Cancel").clicked() { self.show_settings = false; }
+                    });
                 });
-            });
         }
     }
 }
