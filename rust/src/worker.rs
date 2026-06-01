@@ -26,6 +26,7 @@ pub fn run(
     tx_ui: Sender<UiEvent>,
     shared: Arc<SharedState>,
     speaking: Arc<AtomicBool>,
+    echo: std::sync::Arc<crate::echo::EchoCancel>,
 ) {
     let mut vad = match crate::vad::Vad::load(SILERO_MODEL_PATH) {
         Ok(v) => v,
@@ -172,7 +173,7 @@ pub fn run(
         speaking.store(true, Ordering::SeqCst);
         stop_tts.store(false, Ordering::SeqCst);
 
-        let _ = crate::tts::speak_stoppable(&client, &refined, &stop_tts, &rx_ctrl, None);
+        let _ = crate::tts::speak_stoppable(&client, &refined, &stop_tts, &rx_ctrl, Some(&echo));
 
         speaking.store(false, Ordering::SeqCst);
         reset_to_idle(&shared, &tx_ui, &mut vad);
