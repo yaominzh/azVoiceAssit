@@ -34,12 +34,16 @@ pub fn speak_stoppable(
         .bytes()
         .map_err(|e| format!("tts bytes: {e}"))?;
 
-    // Push TTS PCM as AEC reference before playback (AEC phase 1 shadow mode)
+    // Push TTS PCM as AEC reference before playback (AEC phase 1 shadow mode).
+    // Qwen3-TTS outputs 24kHz; AEC runs at 16kHz — must resample first or the
+    // reference time axis is ~1.5× faster than the capture axis, breaking convergence.
     if let Some(ec) = echo {
         if let Ok(pcm_i16) = extract_wav_pcm_i16(&bytes) {
-            for chunk in pcm_i16.chunks(crate::config::FRAME) {
-                let frame_f32 = crate::echo::i16_to_f32(chunk);
-                ec.push_reference(&frame_f32);
+            let raw_f32 = crate::echo::i16_to_f32(&pcm_i16);
+            let resampled = crate::audio::downsample(
+                &raw_f32, 24_000, crate::config::SAMPLE_RATE);
+            for chunk in resampled.chunks(crate::config::FRAME) {
+                ec.push_reference(chunk);
             }
         }
     }

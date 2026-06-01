@@ -8,7 +8,7 @@ use crate::state::SharedState;
 
 /// Linear interpolation resampler: avoids aliasing from point-sampling.
 /// Handles non-integer ratios correctly (e.g. 44100→16000 = 2.75625×).
-fn downsample(buf: &[f32], src_rate: u32, dst_rate: u32) -> Vec<f32> {
+pub fn downsample(buf: &[f32], src_rate: u32, dst_rate: u32) -> Vec<f32> {
     if src_rate == dst_rate { return buf.to_vec(); }
     let ratio = src_rate as f64 / dst_rate as f64;
     let out_len = ((buf.len() as f64) / ratio) as usize;
