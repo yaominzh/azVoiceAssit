@@ -199,8 +199,13 @@ impl eframe::App for VoiceApp {
                     ui.add(egui::TextEdit::multiline(&mut self.draft.system_prompt)
                         .desired_rows(4).desired_width(f32::INFINITY));
                     ui.add_space(6.0);
-                    ui.label(egui::RichText::new(format!("Silence timeout: {} ms", self.draft.silence_ms))
-                        .size(11.0).color(egui::Color32::from_gray(160)));
+                    ui.horizontal(|ui| {
+                        ui.label(egui::RichText::new(format!("Silence timeout: {} ms", self.draft.silence_ms))
+                            .size(11.0).color(egui::Color32::from_gray(160)));
+                        ui.label(egui::RichText::new("\u{2139}")   // ℹ
+                            .size(11.0).color(egui::Color32::from_rgb(99, 102, 241)))
+                            .on_hover_text("How long you must pause before the turn ends.\n300ms = very snappy (cuts off mid-sentence pauses).\n700ms = default, good for normal speech.\n2000–5000ms = allows long pauses mid-thought.");
+                    });
                     ui.add(egui::Slider::new(&mut self.draft.silence_ms, 300_u32..=5000).show_value(false));
                     ui.add_space(4.0);
                     ui.label(egui::RichText::new(format!("Speech threshold: {:.2}", self.draft.speech_threshold))
