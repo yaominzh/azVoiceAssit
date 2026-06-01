@@ -15,3 +15,14 @@ pub const SYSTEM_PROMPT: &str = "You are a refinement assistant. The user gives 
 
 pub const WHISPER_MODEL_PATH: &str = "models/ggml-base.en.bin";
 pub const SILERO_MODEL_PATH: &str = "models/silero_vad.onnx";
+
+/// Returns the path to the settings JSON file (~/.config/azva/settings.json).
+/// Uses $HOME to avoid shell expansion issues.
+pub fn settings_path() -> std::path::PathBuf {
+    std::env::var("HOME")
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|_| std::path::PathBuf::from("."))
+        .join(".config")
+        .join("azva")
+        .join("settings.json")
+}

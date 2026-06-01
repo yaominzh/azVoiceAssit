@@ -1,5 +1,6 @@
 mod audio;
 mod config;
+mod settings;
 mod events;
 mod history;
 mod refine;
@@ -11,6 +12,7 @@ mod tts;
 mod ui;
 mod vad;
 mod worker;
+mod echo;
 
 use std::sync::{Arc, atomic::AtomicBool};
 use crossbeam_channel::bounded;
@@ -46,8 +48,9 @@ fn main() -> eframe::Result<()> {
         std::process::exit(1);
     }
 
-    // Channels
-    let (tx_audio, rx_audio) = bounded::<Vec<f32>>(256);
+    // Two channels: raw (cpal → processing thread), processed (processing thread → worker)
+    let (tx_raw, rx_raw) = bounded::<Vec<f32>>(256);
+    let (tx_processed, rx_processed) = bounded::<Vec<f32>>(256);
     let (tx_ctrl, rx_ctrl) = bounded::<ControlMsg>(64);
     let (tx_ui, rx_ui) = bounded::<UiEvent>(256);
 
@@ -55,8 +58,20 @@ fn main() -> eframe::Result<()> {
     let shared = Arc::new(state::SharedState::new());
     let speaking = Arc::new(AtomicBool::new(false));
 
-    // Start mic capture — keep stream alive for the process lifetime
-    let _stream = match audio::start_capture(tx_audio, shared.clone(), speaking.clone()) {
+    // Create AEC engine (Phase 1: shadow mode)
+    let echo_arc = match echo::EchoCancel::new(config::FRAME, 4096) {
+        Ok(ec) => {
+            eprintln!("[aec] EchoCancel ready (frame={} filter=4096)", config::FRAME);
+            Arc::new(ec)
+        }
+        Err(e) => {
+            eprintln!("[aec] EchoCancel init failed: {e}");
+            std::process::exit(1);
+        }
+    };
+
+    // Start capture — keeps stream alive for process lifetime
+    let _stream = match audio::start_capture(tx_raw, shared.clone(), speaking.clone()) {
         Ok(s) => s,
         Err(e) => {
             eprintln!("Failed to start audio capture: {e}");
@@ -64,10 +79,15 @@ fn main() -> eframe::Result<()> {
         }
     };
 
-    // Spawn worker thread
+    // Audio processing thread: raw frames → AEC → processed frames
+    let _processing = audio::start_processing_thread(
+        rx_raw, tx_processed, Some(echo_arc.clone()));
+
+    // Worker thread
     let shared_w = shared.clone();
     let speaking_w = speaking.clone();
-    std::thread::spawn(move || worker::run(rx_audio, rx_ctrl, tx_ui, shared_w, speaking_w));
+    let echo_w = echo_arc.clone();
+    std::thread::spawn(move || worker::run(rx_processed, rx_ctrl, tx_ui, shared_w, speaking_w, echo_w));
 
     // Run egui window — blocks until the window is closed
     let options = eframe::NativeOptions {

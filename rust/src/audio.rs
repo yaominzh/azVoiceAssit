@@ -3,11 +3,12 @@ use crossbeam_channel::Sender;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use crate::config::{SAMPLE_RATE, FRAME};
+use crate::echo::EchoCancel;
 use crate::state::SharedState;
 
 /// Linear interpolation resampler: avoids aliasing from point-sampling.
 /// Handles non-integer ratios correctly (e.g. 44100→16000 = 2.75625×).
-fn downsample(buf: &[f32], src_rate: u32, dst_rate: u32) -> Vec<f32> {
+pub fn downsample(buf: &[f32], src_rate: u32, dst_rate: u32) -> Vec<f32> {
     if src_rate == dst_rate { return buf.to_vec(); }
     let ratio = src_rate as f64 / dst_rate as f64;
     let out_len = ((buf.len() as f64) / ratio) as usize;
@@ -78,4 +79,50 @@ pub fn start_capture(
 
     stream.play().map_err(|e| format!("play stream: {e}"))?;
     Ok(stream)
+}
+
+/// Spawn the audio-processing thread.
+///
+/// Pulls raw f32 frames from `rx_raw`, runs them through AEC if `echo` is Some,
+/// and forwards to `tx_processed`. The cpal callback in `start_capture` is
+/// unchanged — it remains lock-free.
+///
+/// Phase 1 shadow mode: logs AEC cancellation ratio when audio is active.
+/// The existing `speaking` gate in `start_capture` is NOT removed.
+pub fn start_processing_thread(
+    rx_raw: crossbeam_channel::Receiver<Vec<f32>>,
+    tx_processed: crossbeam_channel::Sender<Vec<f32>>,
+    echo: Option<Arc<EchoCancel>>,
+) -> std::thread::JoinHandle<()> {
+    std::thread::spawn(move || {
+        loop {
+            let frame = match rx_raw.recv() {
+                Ok(f) => f,
+                Err(_) => return, // channel closed, exit thread
+            };
+
+            let processed = match &echo {
+                Some(ec) => {
+                    let cancelled = ec.process_frame(&frame);
+                    // Phase 1: log AEC shadow activity when signal is present
+                    let raw_rms: f32 = (frame.iter().map(|x| x * x).sum::<f32>()
+                        / frame.len() as f32).sqrt();
+                    let clean_rms: f32 = (cancelled.iter().map(|x| x * x).sum::<f32>()
+                        / cancelled.len() as f32).sqrt();
+                    if raw_rms > 0.01 {
+                        eprintln!(
+                            "[aec-shadow] raw_rms={:.4} clean_rms={:.4} reduction={:.1}dB",
+                            raw_rms,
+                            clean_rms,
+                            20.0 * (clean_rms / (raw_rms + 1e-9)).log10()
+                        );
+                    }
+                    cancelled
+                }
+                None => frame, // AEC unavailable — pass through unchanged
+            };
+
+            let _ = tx_processed.try_send(processed);
+        }
+    })
 }

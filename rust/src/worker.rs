@@ -2,10 +2,23 @@ use crossbeam_channel::{Receiver, Sender, TryRecvError};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
-use crate::config::{HISTORY_MAXLEN, PREROLL_FRAMES, SILERO_MODEL_PATH, SYSTEM_PROMPT, WHISPER_MODEL_PATH, MIN_SILENCE_MS};
+use crate::config::{HISTORY_MAXLEN, PREROLL_FRAMES, SILERO_MODEL_PATH, WHISPER_MODEL_PATH};
 use crate::events::{ControlMsg, State, UiEvent};
 use crate::state::SharedState;
 use crate::timing::TurnTiming;
+
+/// Format a SystemTime as HH:MM:SS UTC. No chrono dependency.
+pub fn format_timestamp_at(t: std::time::SystemTime) -> String {
+    let secs = t
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs();
+    format!("{:02}:{:02}:{:02}", (secs / 3600) % 24, (secs / 60) % 60, secs % 60)
+}
+
+fn format_timestamp() -> String {
+    format_timestamp_at(std::time::SystemTime::now())
+}
 
 pub fn run(
     rx_audio: Receiver<Vec<f32>>,
@@ -13,11 +26,16 @@ pub fn run(
     tx_ui: Sender<UiEvent>,
     shared: Arc<SharedState>,
     speaking: Arc<AtomicBool>,
+    echo: std::sync::Arc<crate::echo::EchoCancel>,
 ) {
     let mut vad = match crate::vad::Vad::load(SILERO_MODEL_PATH) {
         Ok(v) => v,
         Err(e) => { eprintln!("[worker] VAD load failed: {e}"); return; }
     };
+    // Load persisted settings (or defaults). Apply initial thresholds to VAD.
+    let mut settings = crate::settings::AppSettings::load();
+    let mut system_prompt = settings.system_prompt.clone();
+    vad.set_thresholds(settings.silence_ms, settings.speech_threshold);
     let mut seg = crate::segmenter::Segmenter::new(PREROLL_FRAMES);
     let mut history = crate::history::History::new(HISTORY_MAXLEN);
     let stt = match crate::stt::Stt::load(WHISPER_MODEL_PATH) {
@@ -43,6 +61,13 @@ pub fn run(
                 Ok(ControlMsg::Stop) => {
                     stop_tts.store(true, Ordering::SeqCst);
                 }
+                Ok(ControlMsg::SettingsChanged(s)) => {
+                    system_prompt = s.system_prompt.clone();
+                    vad.set_thresholds(s.silence_ms, s.speech_threshold);
+                    // Recreate history with new cap (clears it — fresh start on settings change)
+                    history = crate::history::History::new(s.history_turns as usize * 2);
+                    settings = s;
+                }
                 Err(TryRecvError::Empty) => break,
                 Err(_) => return, // channel closed
             }
@@ -65,6 +90,12 @@ pub fn run(
                     }
                     Ok(ControlMsg::Stop) => {
                         stop_tts.store(true, Ordering::SeqCst);
+                    }
+                    Ok(ControlMsg::SettingsChanged(s)) => {
+                        system_prompt = s.system_prompt.clone();
+                        vad.set_thresholds(s.silence_ms, s.speech_threshold);
+                        history = crate::history::History::new(s.history_turns as usize * 2);
+                        settings = s;
                     }
                     Err(_) => return,
                 }
@@ -103,18 +134,28 @@ pub fn run(
             continue;
         }
 
-        let messages = history.record_user_and_build(&text, SYSTEM_PROMPT);
+        let messages = if settings.history_turns == 0 {
+            // Stateless: send only [system + current turn] — avoids refine slowdown
+            vec![
+                serde_json::json!({"role": "system", "content": system_prompt}),
+                serde_json::json!({"role": "user", "content": text}),
+            ]
+        } else {
+            history.record_user_and_build(&text, &system_prompt)
+        };
         let t1 = std::time::Instant::now();
         let refined = match crate::refine::refine(&client, messages) {
             Ok(r) => r,
             Err(e) => { eprintln!("[worker] refine: {e}"); reset_to_idle(&shared, &tx_ui, &mut vad); continue; }
         };
-        history.record_assistant(&refined);
+        if settings.history_turns > 0 {
+            history.record_assistant(&refined);
+        }
         let refine_ms = t1.elapsed().as_millis() as u32;
         let reply_start_ms = t0.elapsed().as_millis() as u32;
 
         let timing = TurnTiming {
-            endpoint_ms: MIN_SILENCE_MS,
+            endpoint_ms: settings.silence_ms,   // was MIN_SILENCE_MS
             stt_ms,
             refine_ms,
             reply_start_ms,
@@ -123,6 +164,7 @@ pub fn run(
             heard: text.clone(),
             refined: refined.clone(),
             timing,
+            timestamp: format_timestamp(),
         });
 
         // TTS
@@ -131,7 +173,7 @@ pub fn run(
         speaking.store(true, Ordering::SeqCst);
         stop_tts.store(false, Ordering::SeqCst);
 
-        let _ = crate::tts::speak_stoppable(&client, &refined, &stop_tts, &rx_ctrl);
+        let _ = crate::tts::speak_stoppable(&client, &refined, &stop_tts, &rx_ctrl, Some(&echo));
 
         speaking.store(false, Ordering::SeqCst);
         reset_to_idle(&shared, &tx_ui, &mut vad);
@@ -146,4 +188,23 @@ fn reset_to_idle(shared: &SharedState, tx_ui: &Sender<UiEvent>, vad: &mut crate:
     shared.set(s);
     let _ = tx_ui.send(UiEvent::StateChanged(s));
     vad.reset();
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn format_timestamp_known_epoch() {
+        use std::time::{Duration, UNIX_EPOCH};
+        // 3661 seconds = 1h 1m 1s UTC
+        let t = UNIX_EPOCH + Duration::from_secs(3661);
+        assert_eq!(super::format_timestamp_at(t), "01:01:01");
+    }
+
+    #[test]
+    fn format_timestamp_midnight_rollover() {
+        use std::time::{Duration, UNIX_EPOCH};
+        // 86400 seconds = exactly 1 day → 00:00:00
+        let t = UNIX_EPOCH + Duration::from_secs(86400);
+        assert_eq!(super::format_timestamp_at(t), "00:00:00");
+    }
 }

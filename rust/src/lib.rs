@@ -1,5 +1,6 @@
 pub mod audio;
 pub mod config;
+pub mod settings;
 pub mod events;
 pub mod history;
 pub mod refine;
@@ -11,3 +12,4 @@ pub mod tts;
 pub mod ui;
 pub mod vad;
 pub mod worker;
+pub mod echo;
