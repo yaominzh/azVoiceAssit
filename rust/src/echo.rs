@@ -46,9 +46,10 @@ impl EchoCancel {
             .unwrap_or_else(|_| vec![0i16; self.frame_size]);
 
         let mut out = vec![0i16; self.frame_size];
-        if let Ok(aec) = self.aec.lock() {
-            aec.cancel_echo(&mic_i16, &ref_i16, &mut out);
-        }
+        // Recover from poisoned mutex (C FFI panic in cancel_echo) — the per-frame
+        // AEC call is idempotent so recovering the inner value is safe.
+        let aec = self.aec.lock().unwrap_or_else(|e| e.into_inner());
+        aec.cancel_echo(&mic_i16, &ref_i16, &mut out);
         i16_to_f32(&out)
     }
 
@@ -61,6 +62,12 @@ impl EchoCancel {
         // recreate the Aec — but for Phase 1 shadow mode this is sufficient.
     }
 }
+
+// SAFETY: Aec wraps *mut SpeexEchoState. Speex C library is not thread-safe for
+// concurrent access to the same state, but Mutex<Aec> guarantees exclusive access.
+// Each EchoCancel owns its own Speex state; there is no shared global state.
+unsafe impl Send for EchoCancel {}
+unsafe impl Sync for EchoCancel {}
 
 /// Convert f32 [-1.0, 1.0] → i16 with saturation clamping.
 pub fn f32_to_i16(samples: &[f32]) -> Vec<i16> {
