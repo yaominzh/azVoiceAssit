@@ -7,6 +7,19 @@ use crate::events::{ControlMsg, State, UiEvent};
 use crate::state::SharedState;
 use crate::timing::TurnTiming;
 
+/// Format a SystemTime as HH:MM:SS UTC. No chrono dependency.
+pub fn format_timestamp_at(t: std::time::SystemTime) -> String {
+    let secs = t
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs();
+    format!("{:02}:{:02}:{:02}", (secs / 3600) % 24, (secs / 60) % 60, secs % 60)
+}
+
+fn format_timestamp() -> String {
+    format_timestamp_at(std::time::SystemTime::now())
+}
+
 pub fn run(
     rx_audio: Receiver<Vec<f32>>,
     rx_ctrl: Receiver<ControlMsg>,
@@ -43,6 +56,7 @@ pub fn run(
                 Ok(ControlMsg::Stop) => {
                     stop_tts.store(true, Ordering::SeqCst);
                 }
+                Ok(ControlMsg::SettingsChanged(_)) => {} // handled in future task
                 Err(TryRecvError::Empty) => break,
                 Err(_) => return, // channel closed
             }
@@ -66,6 +80,7 @@ pub fn run(
                     Ok(ControlMsg::Stop) => {
                         stop_tts.store(true, Ordering::SeqCst);
                     }
+                    Ok(ControlMsg::SettingsChanged(_)) => {} // handled in future task
                     Err(_) => return,
                 }
                 continue;
@@ -123,6 +138,7 @@ pub fn run(
             heard: text.clone(),
             refined: refined.clone(),
             timing,
+            timestamp: format_timestamp(),
         });
 
         // TTS
@@ -146,4 +162,23 @@ fn reset_to_idle(shared: &SharedState, tx_ui: &Sender<UiEvent>, vad: &mut crate:
     shared.set(s);
     let _ = tx_ui.send(UiEvent::StateChanged(s));
     vad.reset();
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn format_timestamp_known_epoch() {
+        use std::time::{Duration, UNIX_EPOCH};
+        // 3661 seconds = 1h 1m 1s UTC
+        let t = UNIX_EPOCH + Duration::from_secs(3661);
+        assert_eq!(super::format_timestamp_at(t), "01:01:01");
+    }
+
+    #[test]
+    fn format_timestamp_midnight_rollover() {
+        use std::time::{Duration, UNIX_EPOCH};
+        // 86400 seconds = exactly 1 day → 00:00:00
+        let t = UNIX_EPOCH + Duration::from_secs(86400);
+        assert_eq!(super::format_timestamp_at(t), "00:00:00");
+    }
 }

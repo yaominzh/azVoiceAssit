@@ -25,7 +25,7 @@ impl eframe::App for VoiceApp {
         while let Ok(event) = self.rx_ui.try_recv() {
             match event {
                 UiEvent::StateChanged(s) => self.state = s,
-                UiEvent::Turn { heard, refined, timing } => {
+                UiEvent::Turn { heard, refined, timing, timestamp: _ } => {
                     eprintln!("{}", timing.format());
                     self.transcript.push((heard, refined));
                     if self.transcript.len() > 100 {
