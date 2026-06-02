@@ -1,7 +1,7 @@
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use crossbeam_channel::Sender;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::Ordering;
 use crate::config::{SAMPLE_RATE, FRAME};
 use crate::echo::EchoCancel;
 use crate::state::SharedState;
@@ -27,7 +27,6 @@ pub fn downsample(buf: &[f32], src_rate: u32, dst_rate: u32) -> Vec<f32> {
 pub fn start_capture(
     tx: Sender<Vec<f32>>,
     shared: Arc<SharedState>,
-    speaking: Arc<AtomicBool>,
 ) -> Result<cpal::Stream, String> {
     let host = cpal::default_host();
     let device = host
@@ -54,9 +53,7 @@ pub fn start_capture(
         .build_input_stream(
             &config,
             move |data: &[f32], _: &cpal::InputCallbackInfo| {
-                if !shared.listening_enabled.load(Ordering::Relaxed)
-                    || speaking.load(Ordering::Relaxed)
-                {
+                if !shared.listening_enabled.load(Ordering::Relaxed) {
                     return;
                 }
                 // Downmix interleaved channels to mono (take channel 0).
