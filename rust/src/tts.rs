@@ -10,21 +10,26 @@ pub fn build_tts_body(text: &str) -> Value {
 }
 
 /// Fetch wav bytes from the TTS service and play them, polling `stop_flag` every
-/// 50 ms (and `rx_ctrl` for `ControlMsg::Stop`) to allow interruption mid-playback.
+/// 50 ms to allow interruption mid-playback (barge-in).
+///
+/// `rx_ctrl` is intentionally absent: the worker owns the channel exclusively
+/// during TTS so barge-in Stop signals arrive via `stop_flag` (set by the worker
+/// before calling this function or by a concurrent watcher thread).
 ///
 /// rodio 0.22.x API: DeviceSinkBuilder::open_default_sink() -> MixerDeviceSink,
 /// Player::connect_new(mixer) -> Player, Decoder::try_from(cursor) -> Result.
-/// Also drains `rx_ctrl` on each poll tick: a `ControlMsg::Stop` sets the flag
-/// and stops playback immediately; other messages are silently dropped here and
-/// will be re-processed on the next worker loop iteration (they won't arrive
-/// again, but they're low-priority control signals during TTS).
 pub fn speak_stoppable(
     client: &reqwest::blocking::Client,
     text: &str,
     stop_flag: &AtomicBool,
-    rx_ctrl: &crossbeam_channel::Receiver<crate::events::ControlMsg>,
-    echo: Option<&Arc<EchoCancel>>,
+    echo: Option<&Arc<crate::echo::EchoCancel>>,
 ) -> Result<(), String> {
+    // Check stop before even making the HTTP request (barge-in may have arrived)
+    if stop_flag.load(Ordering::SeqCst) {
+        if let Some(ec) = echo { ec.reset(); }
+        return Ok(());
+    }
+
     let bytes = client
         .post(crate::config::TTS_URL)
         .json(&build_tts_body(text))
@@ -34,9 +39,13 @@ pub fn speak_stoppable(
         .bytes()
         .map_err(|e| format!("tts bytes: {e}"))?;
 
-    // Push TTS PCM as AEC reference before playback (AEC phase 1 shadow mode).
-    // Qwen3-TTS outputs 24kHz; AEC runs at 16kHz — must resample first or the
-    // reference time axis is ~1.5× faster than the capture axis, breaking convergence.
+    // Check again after HTTP completes (barge-in may have arrived during request)
+    if stop_flag.load(Ordering::SeqCst) {
+        if let Some(ec) = echo { ec.reset(); }
+        return Ok(());
+    }
+
+    // Push TTS PCM as AEC reference (resampled 24kHz→16kHz)
     if let Some(ec) = echo {
         if let Ok(pcm_i16) = extract_wav_pcm_i16(&bytes) {
             let raw_f32 = crate::echo::i16_to_f32(&pcm_i16);
@@ -55,7 +64,6 @@ pub fn speak_stoppable(
         .map_err(|e| format!("decode: {e}"))?;
     player.append(src);
 
-    // Poll until playback finishes or stop_flag is set
     loop {
         if stop_flag.load(Ordering::SeqCst) {
             player.stop();
@@ -63,12 +71,6 @@ pub fn speak_stoppable(
             return Ok(());
         }
         if player.empty() {
-            if let Some(ec) = echo { ec.reset(); }
-            return Ok(());
-        }
-        // Check ctrl channel for Stop during TTS playback
-        if let Ok(crate::events::ControlMsg::Stop) = rx_ctrl.try_recv() {
-            player.stop();
             if let Some(ec) = echo { ec.reset(); }
             return Ok(());
         }
@@ -98,6 +100,16 @@ pub fn extract_wav_pcm_i16(wav: &[u8]) -> Result<Vec<i16>, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn speak_stoppable_signature_has_no_rx_ctrl() {
+        // Compile-time check: speak_stoppable takes stop_flag but NOT rx_ctrl.
+        use std::sync::atomic::AtomicBool;
+        use std::sync::Arc;
+        use crate::echo::EchoCancel;
+        let _: fn(&reqwest::blocking::Client, &str, &AtomicBool, Option<&Arc<EchoCancel>>)
+            -> Result<(), String> = speak_stoppable;
+    }
 
     #[test]
     fn tts_body_has_text() {

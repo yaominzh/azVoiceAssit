@@ -173,7 +173,7 @@ pub fn run(
         speaking.store(true, Ordering::SeqCst);
         stop_tts.store(false, Ordering::SeqCst);
 
-        let _ = crate::tts::speak_stoppable(&client, &refined, &stop_tts, &rx_ctrl, Some(&echo));
+        let _ = crate::tts::speak_stoppable(&client, &refined, &stop_tts, Some(&echo));
 
         speaking.store(false, Ordering::SeqCst);
         reset_to_idle(&shared, &tx_ui, &mut vad);
