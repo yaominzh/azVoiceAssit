@@ -52,7 +52,7 @@ pub fn run(
         Err(e) => { eprintln!("[worker] STT load failed: {e}"); return; }
     };
     let client = reqwest::blocking::Client::new();
-    let stop_tts = Arc::new(AtomicBool::new(false));
+    // stop_tts removed — per-gen stop flags in TtsHandle replace it
     let mut tts_gen: u64 = 0;
     let mut active_tts: Option<TtsHandle> = None;
     let (tts_done_tx, tts_done_rx) = crossbeam_channel::bounded::<u64>(8);
@@ -74,7 +74,6 @@ pub fn run(
                     if let Some(ref handle) = active_tts {
                         handle.stop.store(true, Ordering::SeqCst);
                     }
-                    stop_tts.store(true, Ordering::SeqCst); // backward compat
                 }
                 Ok(ControlMsg::SettingsChanged(s)) => {
                     system_prompt = s.system_prompt.clone();
@@ -118,8 +117,7 @@ pub fn run(
                         if let Some(ref handle) = active_tts {
                             handle.stop.store(true, Ordering::SeqCst);
                         }
-                        stop_tts.store(true, Ordering::SeqCst); // backward compat
-                    }
+                        }
                     Ok(ControlMsg::SettingsChanged(s)) => {
                         system_prompt = s.system_prompt.clone();
                         vad.set_thresholds(s.silence_ms, s.speech_threshold);
