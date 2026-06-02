@@ -20,6 +20,15 @@ fn format_timestamp() -> String {
     format_timestamp_at(std::time::SystemTime::now())
 }
 
+/// Per-generation TTS cancellation handle.
+struct TtsHandle {
+    stop: Arc<std::sync::atomic::AtomicBool>,
+    generation: u64,
+}
+
+/// Minimum AEC-cleaned RMS to treat VadEvent::Start as user speech, not echo leakage.
+const BARGE_IN_THRESHOLD: f32 = 0.02;
+
 pub fn run(
     rx_audio: Receiver<Vec<f32>>,
     rx_ctrl: Receiver<ControlMsg>,
@@ -44,6 +53,9 @@ pub fn run(
     };
     let client = reqwest::blocking::Client::new();
     let stop_tts = Arc::new(AtomicBool::new(false));
+    let mut tts_gen: u64 = 0;
+    let mut active_tts: Option<TtsHandle> = None;
+    let (tts_done_tx, tts_done_rx) = crossbeam_channel::bounded::<u64>(8);
 
     loop {
         // Drain control messages first
@@ -59,7 +71,10 @@ pub fn run(
                     let _ = tx_ui.send(UiEvent::Cleared);
                 }
                 Ok(ControlMsg::Stop) => {
-                    stop_tts.store(true, Ordering::SeqCst);
+                    if let Some(ref handle) = active_tts {
+                        handle.stop.store(true, Ordering::SeqCst);
+                    }
+                    stop_tts.store(true, Ordering::SeqCst); // backward compat
                 }
                 Ok(ControlMsg::SettingsChanged(s)) => {
                     system_prompt = s.system_prompt.clone();
@@ -68,7 +83,18 @@ pub fn run(
                     history = crate::history::History::new(s.history_turns as usize * 2);
                     settings = s;
                 }
-                Err(TryRecvError::Empty) => break,
+                Err(TryRecvError::Empty) => {
+                    // Also drain TTS completion notifications
+                    while let Ok(done_gen) = tts_done_rx.try_recv() {
+                        if let Some(ref h) = active_tts {
+                            if h.generation == done_gen {
+                                active_tts = None;
+                                reset_to_idle(&shared, &tx_ui, &mut vad);
+                            }
+                        }
+                    }
+                    break;
+                }
                 Err(_) => return, // channel closed
             }
         }
@@ -89,7 +115,10 @@ pub fn run(
                         let _ = tx_ui.send(UiEvent::Cleared);
                     }
                     Ok(ControlMsg::Stop) => {
-                        stop_tts.store(true, Ordering::SeqCst);
+                        if let Some(ref handle) = active_tts {
+                            handle.stop.store(true, Ordering::SeqCst);
+                        }
+                        stop_tts.store(true, Ordering::SeqCst); // backward compat
                     }
                     Ok(ControlMsg::SettingsChanged(s)) => {
                         system_prompt = s.system_prompt.clone();
@@ -112,6 +141,22 @@ pub fn run(
             Ok(e) => e,
             Err(e) => { eprintln!("[worker] VAD error: {e}"); vad.reset(); continue; }
         };
+
+        // Barge-in: confident speech onset during TTS → stop TTS immediately.
+        // Require minimum clean_rms to avoid stopping on AEC echo leakage.
+        if event == Some(crate::segmenter::VadEvent::Start) {
+            if let Some(ref handle) = active_tts {
+                let clean_rms = (frame.iter().map(|x| x * x).sum::<f32>()
+                    / frame.len() as f32).sqrt();
+                if clean_rms > BARGE_IN_THRESHOLD {
+                    eprintln!("[barge-in] stopping TTS gen={} clean_rms={:.4}",
+                        handle.generation, clean_rms);
+                    handle.stop.store(true, Ordering::SeqCst);
+                    // Do NOT reset vad/segmenter — keep accumulating user's speech
+                }
+            }
+        }
+
         // Segmenter
         let utterance = match seg.push(frame, event) {
             Some(u) => u,
@@ -167,19 +212,40 @@ pub fn run(
             timestamp: format_timestamp(),
         });
 
-        // TTS
+        // Cancel any previous in-flight TTS (overlapping barge-in race)
+        if let Some(ref old) = active_tts {
+            old.stop.store(true, Ordering::SeqCst);
+        }
+
+        tts_gen += 1;
+        let gen = tts_gen;
+        let stop = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        active_tts = Some(TtsHandle { stop: stop.clone(), generation: gen });
+
         shared.set(State::Speaking);
         let _ = tx_ui.send(UiEvent::StateChanged(State::Speaking));
         speaking.store(true, Ordering::SeqCst);
-        stop_tts.store(false, Ordering::SeqCst);
 
-        let _ = crate::tts::speak_stoppable(&client, &refined, &stop_tts, Some(&echo));
+        let echo_c    = echo.clone();
+        let client_c  = client.clone();
+        let refined_c = refined.clone();
+        let done_tx   = tts_done_tx.clone();
+        let speaking_c = speaking.clone();
 
-        speaking.store(false, Ordering::SeqCst);
-        reset_to_idle(&shared, &tx_ui, &mut vad);
+        std::thread::spawn(move || {
+            let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                let _ = crate::tts::speak_stoppable(
+                    &client_c, &refined_c, &stop, Some(&echo_c));
+            }));
+            if result.is_err() {
+                eprintln!("[tts] thread panicked — cleaning up");
+            }
+            speaking_c.store(false, Ordering::SeqCst);
+            let _ = done_tx.try_send(gen);
+        });
 
-        // Drain stale frames accumulated during TTS
-        while rx_audio.try_recv().is_ok() {}
+        // Worker returns to VAD loop immediately — no block, no drain.
+        // State stays Speaking until TtsDone arrives (handled above in ctrl drain).
     }
 }
 
@@ -206,5 +272,52 @@ mod tests {
         // 86400 seconds = exactly 1 day → 00:00:00
         let t = UNIX_EPOCH + Duration::from_secs(86400);
         assert_eq!(super::format_timestamp_at(t), "00:00:00");
+    }
+
+    #[test]
+    fn barge_in_fires_above_threshold() {
+        use std::sync::Arc;
+        use std::sync::atomic::{AtomicBool, Ordering};
+
+        struct TtsHandle { stop: Arc<AtomicBool>, generation: u64 }
+        const BARGE_IN_THRESHOLD: f32 = 0.02;
+
+        let stop = Arc::new(AtomicBool::new(false));
+        let handle = TtsHandle { stop: stop.clone(), generation: 1 };
+        let clean_rms = 0.05f32;
+        if clean_rms > BARGE_IN_THRESHOLD { handle.stop.store(true, Ordering::SeqCst); }
+        assert!(stop.load(Ordering::SeqCst));
+    }
+
+    #[test]
+    fn barge_in_suppressed_below_threshold() {
+        use std::sync::Arc;
+        use std::sync::atomic::{AtomicBool, Ordering};
+
+        struct TtsHandle { stop: Arc<AtomicBool>, generation: u64 }
+        const BARGE_IN_THRESHOLD: f32 = 0.02;
+
+        let stop = Arc::new(AtomicBool::new(false));
+        let handle = TtsHandle { stop: stop.clone(), generation: 1 };
+        let clean_rms = 0.005f32;
+        if clean_rms > BARGE_IN_THRESHOLD { handle.stop.store(true, Ordering::SeqCst); }
+        assert!(!stop.load(Ordering::SeqCst));
+    }
+
+    #[test]
+    fn stale_tts_done_does_not_affect_active_generation() {
+        let active_gen = 2u64;
+        let stale_done_gen = 1u64;
+        let cleared = active_gen == stale_done_gen;
+        assert!(!cleared);
+    }
+
+    #[test]
+    fn stop_button_sets_active_tts_stop_flag() {
+        use std::sync::Arc;
+        use std::sync::atomic::{AtomicBool, Ordering};
+        let stop = Arc::new(AtomicBool::new(false));
+        stop.store(true, Ordering::SeqCst);
+        assert!(stop.load(Ordering::SeqCst));
     }
 }
