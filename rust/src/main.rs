@@ -71,7 +71,7 @@ fn main() -> eframe::Result<()> {
     };
 
     // Start capture — keeps stream alive for process lifetime
-    let _stream = match audio::start_capture(tx_raw, shared.clone(), speaking.clone()) {
+    let _stream = match audio::start_capture(tx_raw, shared.clone()) {
         Ok(s) => s,
         Err(e) => {
             eprintln!("Failed to start audio capture: {e}");
