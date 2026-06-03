@@ -3,7 +3,7 @@
   "version": "0.1.0",
   "identifier": "com.azva.voiceassistant",
   "build": {
-    "frontendDist": "./static"
+    "frontendDist": "../static"
   },
   "app": {
     "withGlobalTauri": true,
