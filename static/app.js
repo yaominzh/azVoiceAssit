@@ -81,12 +81,24 @@ document.addEventListener("DOMContentLoaded", async () => {
     document.getElementById("mic").onclick   = () => invoke("toggle_mic").catch(console.error);
     document.getElementById("stop").onclick  = () => invoke("stop_tts").catch(console.error);
     document.getElementById("clear").onclick = () => invoke("clear_transcript").catch(console.error);
-    document.getElementById("btn-close").onclick = () => getCurrentWindow().close();
 
-    document.addEventListener("keydown", (e) => {
+    // Close: use appWindow directly (getCurrentWindow().close() can fail silently in v2)
+    const appWin = getCurrentWindow();
+    document.getElementById("btn-close").onclick = async () => {
+        try { await appWin.close(); } catch(e) { console.error("close failed:", e); }
+    };
+
+    // Drag: startDragging() is more reliable than data-tauri-drag-region in Tauri v2
+    document.getElementById("titlebar").addEventListener("mousedown", async (e) => {
+        if (!e.target.closest(".window-controls")) {
+            try { await appWin.startDragging(); } catch(e) { /* ignore */ }
+        }
+    });
+
+    document.addEventListener("keydown", async (e) => {
         if (e.key === "Escape" || (e.metaKey && e.key === "w")) {
             e.preventDefault();
-            getCurrentWindow().close();
+            try { await appWin.close(); } catch(e) { console.error("close failed:", e); }
         }
     });
 
