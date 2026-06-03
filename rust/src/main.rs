@@ -1,24 +1,75 @@
 mod audio;
 mod config;
-mod settings;
+mod echo;
 mod events;
 mod history;
 mod refine;
 mod segmenter;
+mod settings;
 mod state;
 mod stt;
 mod timing;
 mod tts;
-mod ui;
 mod vad;
 mod worker;
-mod echo;
 
 use std::sync::{Arc, atomic::AtomicBool};
 use crossbeam_channel::bounded;
-use crate::events::{ControlMsg, UiEvent};
+use events::{ControlMsg, UiEvent};
+use tauri::Emitter;
 
-fn main() -> eframe::Result<()> {
+/// Bridge state — thin wrapper holding only the ctrl channel sender.
+struct AppBridge {
+    tx_ctrl: crossbeam_channel::Sender<ControlMsg>,
+}
+
+// Testable helper used by all commands
+fn send_ctrl(tx: &crossbeam_channel::Sender<ControlMsg>, msg: ControlMsg) -> Result<(), String> {
+    tx.send(msg).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn toggle_mic(bridge: tauri::State<AppBridge>) -> Result<(), String> {
+    send_ctrl(&bridge.tx_ctrl, ControlMsg::ToggleMic)
+}
+
+#[tauri::command]
+fn stop_tts(bridge: tauri::State<AppBridge>) -> Result<(), String> {
+    send_ctrl(&bridge.tx_ctrl, ControlMsg::Stop)
+}
+
+#[tauri::command]
+fn clear_transcript(bridge: tauri::State<AppBridge>) -> Result<(), String> {
+    send_ctrl(&bridge.tx_ctrl, ControlMsg::Clear)
+}
+
+#[tauri::command]
+fn get_settings() -> settings::AppSettings {
+    settings::AppSettings::load()
+}
+
+#[tauri::command]
+fn get_defaults() -> settings::AppSettings {
+    settings::AppSettings::default()
+}
+
+#[tauri::command]
+fn apply_settings(
+    s: settings::AppSettings,
+    bridge: tauri::State<AppBridge>,
+) -> Result<(), String> {
+    let validated = s.validate();
+    validated.save()?;
+    send_ctrl(&bridge.tx_ctrl, ControlMsg::SettingsChanged(validated))
+}
+
+#[tauri::command]
+fn get_initial_state() -> serde_json::Value {
+    let s = settings::AppSettings::load();
+    serde_json::json!({ "state": "listening", "settings": s })
+}
+
+fn main() {
     // Reachability checks — fail loud and early
     let client = reqwest::blocking::Client::new();
     match client
@@ -27,18 +78,10 @@ fn main() -> eframe::Result<()> {
         .timeout(std::time::Duration::from_secs(5))
         .send()
     {
-        Err(e) => {
-            eprintln!("oMLX not reachable at :8002: {e}");
-            std::process::exit(1);
-        }
-        Ok(r) if !r.status().is_success() => {
-            eprintln!("oMLX error: {}", r.status());
-            std::process::exit(1);
-        }
+        Err(e) => { eprintln!("oMLX not reachable at :8002: {e}"); std::process::exit(1); }
+        Ok(r) if !r.status().is_success() => { eprintln!("oMLX error: {}", r.status()); std::process::exit(1); }
         _ => {}
     }
-    // TTS service: GET / returns 404 (no root route), so only treat a connection
-    // failure as "not reachable" — a response of any status means the server is up.
     if let Err(e) = client
         .get("http://127.0.0.1:8123/")
         .timeout(std::time::Duration::from_secs(5))
@@ -48,7 +91,7 @@ fn main() -> eframe::Result<()> {
         std::process::exit(1);
     }
 
-    // Two channels: raw (cpal → processing thread), processed (processing thread → worker)
+    // Channels
     let (tx_raw, rx_raw) = bounded::<Vec<f32>>(256);
     let (tx_processed, rx_processed) = bounded::<Vec<f32>>(256);
     let (tx_ctrl, rx_ctrl) = bounded::<ControlMsg>(64);
@@ -58,54 +101,104 @@ fn main() -> eframe::Result<()> {
     let shared = Arc::new(state::SharedState::new());
     let speaking = Arc::new(AtomicBool::new(false));
 
-    // Create AEC engine (Phase 1: shadow mode)
+    // AEC engine
     let echo_arc = match echo::EchoCancel::new(config::FRAME, 4096) {
-        Ok(ec) => {
-            eprintln!("[aec] EchoCancel ready (frame={} filter=4096)", config::FRAME);
-            Arc::new(ec)
-        }
-        Err(e) => {
-            eprintln!("[aec] EchoCancel init failed: {e}");
-            std::process::exit(1);
-        }
+        Ok(ec) => { eprintln!("[aec] EchoCancel ready"); Arc::new(ec) }
+        Err(e) => { eprintln!("[aec] EchoCancel init failed: {e}"); std::process::exit(1); }
     };
 
-    // Start capture — keeps stream alive for process lifetime
+    // Capture + processing thread (start_capture takes 2 args — speaking gate removed in AEC Phase 2)
     let _stream = match audio::start_capture(tx_raw, shared.clone()) {
         Ok(s) => s,
-        Err(e) => {
-            eprintln!("Failed to start audio capture: {e}");
-            std::process::exit(1);
-        }
+        Err(e) => { eprintln!("Failed to start audio capture: {e}"); std::process::exit(1); }
     };
-
-    // Audio processing thread: raw frames → AEC → processed frames
-    let _processing = audio::start_processing_thread(
-        rx_raw, tx_processed, Some(echo_arc.clone()));
+    // Pass None here: the AEC shadow mode was suppressing mic audio even when TTS
+    // isn't playing (stale reference frames cancel user speech). The worker still
+    // uses echo_arc for TTS reference feeding; the capture path gets raw frames.
+    let _processing = audio::start_processing_thread(rx_raw, tx_processed, None);
 
     // Worker thread
-    let shared_w = shared.clone();
-    let speaking_w = speaking.clone();
-    let echo_w = echo_arc.clone();
+    let (shared_w, speaking_w, echo_w) = (shared.clone(), speaking.clone(), echo_arc.clone());
     std::thread::spawn(move || worker::run(rx_processed, rx_ctrl, tx_ui, shared_w, speaking_w, echo_w));
 
-    // Run egui window — blocks until the window is closed
-    let options = eframe::NativeOptions {
-        viewport: egui::ViewportBuilder::default()
-            .with_title("Voice Assistant")
-            .with_inner_size([480.0, 700.0])
-            .with_min_inner_size([360.0, 500.0]),
-        ..Default::default()
-    };
-    eframe::run_native(
-        "Voice Assistant",
-        options,
-        Box::new(move |cc| {
-            let mut style = (*cc.egui_ctx.global_style()).clone();
-            style.visuals.panel_fill = egui::Color32::from_rgb(0x0B, 0x10, 0x20);
-            style.visuals.window_fill = egui::Color32::from_rgb(0x0B, 0x10, 0x20);
-            cc.egui_ctx.set_global_style(style);
-            Ok(Box::new(ui::VoiceApp::new(rx_ui, tx_ctrl)))
-        }),
-    )
+    // Tauri app
+    tauri::Builder::default()
+        .setup(move |app| {
+            // Bridge thread: drain rx_ui → app.emit()
+            let app_handle = app.handle().clone();
+            std::thread::spawn(move || {
+                while let Ok(event) = rx_ui.recv() {
+                    match event {
+                        UiEvent::StateChanged(s) => {
+                            app_handle.emit("state", events::StatePayload { value: s.label() }).ok();
+                        }
+                        UiEvent::Turn { heard, refined, timing, timestamp } => {
+                            app_handle.emit("turn", events::TurnPayload {
+                                heard, refined, timestamp,
+                                endpoint_ms: timing.endpoint_ms,
+                                stt_ms: timing.stt_ms,
+                                refine_ms: timing.refine_ms,
+                                reply_start_ms: timing.reply_start_ms,
+                            }).ok();
+                        }
+                        UiEvent::Cleared => { app_handle.emit("clear", ()).ok(); }
+                    }
+                }
+            });
+            Ok(())
+        })
+        .manage(AppBridge { tx_ctrl })
+        .invoke_handler(tauri::generate_handler![
+            toggle_mic, stop_tts, clear_transcript,
+            get_settings, get_defaults, apply_settings, get_initial_state,
+        ])
+        .run(tauri::generate_context!())
+        .expect("error running tauri app");
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crossbeam_channel::bounded;
+    use crate::events::ControlMsg;
+    use crate::settings::AppSettings;
+
+    fn make_ctrl() -> (crossbeam_channel::Sender<ControlMsg>, crossbeam_channel::Receiver<ControlMsg>) {
+        bounded(4)
+    }
+
+    #[test]
+    fn toggle_mic_sends_correct_msg() {
+        let (tx, rx) = make_ctrl();
+        send_ctrl(&tx, ControlMsg::ToggleMic).unwrap();
+        assert!(matches!(rx.try_recv().unwrap(), ControlMsg::ToggleMic));
+    }
+
+    #[test]
+    fn stop_tts_sends_stop() {
+        let (tx, rx) = make_ctrl();
+        send_ctrl(&tx, ControlMsg::Stop).unwrap();
+        assert!(matches!(rx.try_recv().unwrap(), ControlMsg::Stop));
+    }
+
+    #[test]
+    fn clear_transcript_sends_clear() {
+        let (tx, rx) = make_ctrl();
+        send_ctrl(&tx, ControlMsg::Clear).unwrap();
+        assert!(matches!(rx.try_recv().unwrap(), ControlMsg::Clear));
+    }
+
+    #[test]
+    fn apply_settings_validates_and_sends_settings_changed() {
+        let (tx, rx) = make_ctrl();
+        // silence_ms 9999 should be clamped to 5000 by validate()
+        let s = AppSettings { silence_ms: 9999, ..AppSettings::default() };
+        let validated = s.validate();
+        send_ctrl(&tx, ControlMsg::SettingsChanged(validated)).unwrap();
+        if let ControlMsg::SettingsChanged(s) = rx.try_recv().unwrap() {
+            assert_eq!(s.silence_ms, 5000);
+        } else {
+            panic!("expected SettingsChanged");
+        }
+    }
 }

@@ -9,7 +9,6 @@ pub mod state;
 pub mod stt;
 pub mod timing;
 pub mod tts;
-pub mod ui;
 pub mod vad;
 pub mod worker;
 pub mod echo;

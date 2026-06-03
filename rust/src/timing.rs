@@ -1,4 +1,4 @@
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize)]
 pub struct TurnTiming {
     pub endpoint_ms: u32,
     pub stt_ms: u32,
@@ -31,5 +31,13 @@ mod tests {
             t.format(),
             "endpoint ~700ms \u{00B7} stt 240ms \u{00B7} refine 180ms \u{00B7} reply-start +430ms"
         );
+    }
+
+    #[test]
+    fn timing_serializes_to_json() {
+        let t = TurnTiming { endpoint_ms: 700, stt_ms: 100, refine_ms: 200, reply_start_ms: 300 };
+        let json = serde_json::to_string(&t).unwrap();
+        assert!(json.contains("\"endpoint_ms\":700"));
+        assert!(json.contains("\"stt_ms\":100"));
     }
 }
