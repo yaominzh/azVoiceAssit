@@ -112,7 +112,10 @@ fn main() {
         Ok(s) => s,
         Err(e) => { eprintln!("Failed to start audio capture: {e}"); std::process::exit(1); }
     };
-    let _processing = audio::start_processing_thread(rx_raw, tx_processed, Some(echo_arc.clone()));
+    // Pass None here: the AEC shadow mode was suppressing mic audio even when TTS
+    // isn't playing (stale reference frames cancel user speech). The worker still
+    // uses echo_arc for TTS reference feeding; the capture path gets raw frames.
+    let _processing = audio::start_processing_thread(rx_raw, tx_processed, None);
 
     // Worker thread
     let (shared_w, speaking_w, echo_w) = (shared.clone(), speaking.clone(), echo_arc.clone());
