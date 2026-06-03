@@ -152,3 +152,42 @@ function tryInit(attemptsLeft) {
 
 // Start retrying once DOM is ready (30 attempts × 100ms = 3 second timeout)
 document.addEventListener("DOMContentLoaded", () => tryInit(30));
+
+// ── Visual settings (blur + opacity) — localStorage, no Rust needed ────────
+
+const appEl = document.getElementById("app");
+
+function applyVisualSettings(blurPx, opacityPct) {
+    appEl.style.backdropFilter = `blur(${blurPx}px)`;
+    appEl.style.webkitBackdropFilter = `blur(${blurPx}px)`;
+    appEl.style.setProperty("--bg-opacity", (opacityPct / 100).toFixed(2));
+}
+
+function loadVisualSettings() {
+    const blur    = Number(localStorage.getItem("blur_px")    ?? 8);
+    const opacity = Number(localStorage.getItem("opacity_pct") ?? 22);
+    applyVisualSettings(blur, opacity);
+    // Sync sliders if settings panel already rendered
+    const bs = document.getElementById("sp-blur");
+    const os = document.getElementById("sp-opacity");
+    if (bs) { bs.value = blur;    document.getElementById("sp-blur-val").textContent = blur; }
+    if (os) { os.value = opacity; document.getElementById("sp-opacity-val").textContent = opacity; }
+}
+
+document.addEventListener("DOMContentLoaded", () => {
+    loadVisualSettings();
+
+    document.getElementById("sp-blur").oninput = (e) => {
+        const v = Number(e.target.value);
+        document.getElementById("sp-blur-val").textContent = v;
+        applyVisualSettings(v, Number(document.getElementById("sp-opacity").value));
+        localStorage.setItem("blur_px", v);
+    };
+
+    document.getElementById("sp-opacity").oninput = (e) => {
+        const v = Number(e.target.value);
+        document.getElementById("sp-opacity-val").textContent = v;
+        applyVisualSettings(Number(document.getElementById("sp-blur").value), v);
+        localStorage.setItem("opacity_pct", v);
+    };
+});
