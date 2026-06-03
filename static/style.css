@@ -58,19 +58,20 @@ body {
   font-size: 80px;
   line-height: 1;
   color: #60a5fa;
-  filter: drop-shadow(0 0 18px rgba(96,165,250,.45));
+
   margin-bottom: 6px;
+  transition: color 0.4s ease, filter 0.4s ease;
 }
 #taichi.listening { animation: blue-glow 1.8s ease-in-out infinite; }
 #taichi.thinking  { animation: spin 1.4s linear infinite, purple-glow 1.8s ease-in-out infinite; color: #a78bfa; }
-#taichi.speaking  { animation: glow 1.2s ease-in-out infinite; color: #34d399; filter: drop-shadow(0 0 14px rgba(52,211,153,.5)); }
+#taichi.speaking  { animation: glow 1.2s ease-in-out infinite; color: #34d399; }
 #taichi.muted     { color: rgba(148,163,184,.4); filter: none; animation: none; }
 
 @keyframes pulse { 0%,100%{opacity:.55;transform:scale(.96)} 50%{opacity:1;transform:scale(1.04)} }
 @keyframes spin  { from{transform:rotate(0)} to{transform:rotate(360deg)} }
-@keyframes blue-glow { 0%,100%{filter:drop-shadow(0 0 8px rgba(96,165,250,.3))} 50%{filter:drop-shadow(0 0 22px rgba(96,165,250,.75))} }
-@keyframes purple-glow { 0%,100%{filter:drop-shadow(0 0 8px rgba(167,139,250,.3))} 50%{filter:drop-shadow(0 0 22px rgba(167,139,250,.75))} }
-@keyframes glow  { 0%,100%{filter:drop-shadow(0 0 8px rgba(52,211,153,.3))} 50%{filter:drop-shadow(0 0 22px rgba(52,211,153,.7))} }
+@keyframes blue-glow { 0%,100%{filter:drop-shadow(0 0 12px rgba(96,165,250,.55))} 50%{filter:drop-shadow(0 0 22px rgba(96,165,250,.80))} }
+@keyframes purple-glow { 0%,100%{filter:drop-shadow(0 0 12px rgba(167,139,250,.55))} 50%{filter:drop-shadow(0 0 22px rgba(167,139,250,.80))} }
+@keyframes glow  { 0%,100%{filter:drop-shadow(0 0 12px rgba(52,211,153,.55))} 50%{filter:drop-shadow(0 0 22px rgba(52,211,153,.80))} }
 
 #status {
   font-size: 10px;
