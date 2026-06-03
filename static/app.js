@@ -55,70 +55,76 @@ function applySettingsDraft(s) {
 let settingsDraft = {};
 
 // ── Tauri bridge ───────────────────────────────────────────────────────────
-
-const { listen } = window.__TAURI__.event;
-const { invoke } = window.__TAURI__.core;
-const { getCurrentWindow } = window.__TAURI__.window;
+// All window.__TAURI__ access is inside DOMContentLoaded — Tauri injects the
+// global AFTER the page loads; destructuring at parse time throws if not ready.
 
 document.addEventListener("DOMContentLoaded", async () => {
-    const init = await invoke("get_initial_state");
-    updateState(init.state);
-    applySettingsDraft(init.settings);
+    const { listen } = window.__TAURI__.event;
+    const { invoke } = window.__TAURI__.core;
+    const { getCurrentWindow } = window.__TAURI__.window;
 
+    // Load initial state from Rust
+    try {
+        const init = await invoke("get_initial_state");
+        updateState(init.state);
+        applySettingsDraft(init.settings);
+    } catch (e) {
+        console.error("get_initial_state failed:", e);
+    }
+
+    // Subscribe to pipeline events
     await listen("state", (e) => updateState(e.payload.value));
     await listen("turn",  (e) => addTurn(e.payload));
     await listen("clear", ()  => clearTranscriptUI());
+
+    // Controls
+    document.getElementById("mic").onclick   = () => invoke("toggle_mic").catch(console.error);
+    document.getElementById("stop").onclick  = () => invoke("stop_tts").catch(console.error);
+    document.getElementById("clear").onclick = () => invoke("clear_transcript").catch(console.error);
+    document.getElementById("btn-close").onclick = () => getCurrentWindow().close();
+
+    document.addEventListener("keydown", (e) => {
+        if (e.key === "Escape" || (e.metaKey && e.key === "w")) {
+            e.preventDefault();
+            getCurrentWindow().close();
+        }
+    });
+
+    // Settings panel
+    document.getElementById("settings-btn").onclick = async () => {
+        const panel = document.getElementById("settings-panel");
+        if (panel.classList.contains("hidden")) {
+            const s = await invoke("get_settings").catch(() => settingsDraft);
+            applySettingsDraft(s);
+            panel.classList.remove("hidden");
+        } else {
+            panel.classList.add("hidden");
+        }
+    };
+
+    document.getElementById("sp-silence").oninput = (e) => {
+        settingsDraft.silence_ms = Number(e.target.value);
+        document.getElementById("sp-silence-val").textContent = e.target.value;
+    };
+    document.getElementById("sp-thresh").oninput = (e) => {
+        settingsDraft.speech_threshold = Number(e.target.value) / 100;
+        document.getElementById("sp-thresh-val").textContent = (Number(e.target.value) / 100).toFixed(2);
+    };
+    document.getElementById("sp-turns").oninput = (e) => {
+        settingsDraft.history_turns = Number(e.target.value);
+        document.getElementById("sp-turns-val").textContent = e.target.value;
+    };
+
+    document.getElementById("sp-apply").onclick = async () => {
+        settingsDraft.system_prompt = document.getElementById("sp-prompt").value;
+        await invoke("apply_settings", { s: settingsDraft }).catch(console.error);
+        document.getElementById("settings-panel").classList.add("hidden");
+    };
+    document.getElementById("sp-defaults").onclick = async () => {
+        const defaults = await invoke("get_defaults").catch(() => ({}));
+        applySettingsDraft(defaults);
+    };
+    document.getElementById("sp-cancel").onclick = () => {
+        document.getElementById("settings-panel").classList.add("hidden");
+    };
 });
-
-// ── Controls ───────────────────────────────────────────────────────────────
-
-document.getElementById("mic").onclick   = () => invoke("toggle_mic");
-document.getElementById("stop").onclick  = () => invoke("stop_tts");
-document.getElementById("clear").onclick = () => invoke("clear_transcript");
-document.getElementById("btn-close").onclick = () => getCurrentWindow().close();
-
-document.addEventListener("keydown", (e) => {
-    if (e.key === "Escape" || (e.metaKey && e.key === "w")) {
-        e.preventDefault();
-        getCurrentWindow().close();
-    }
-});
-
-// ── Settings panel ─────────────────────────────────────────────────────────
-
-document.getElementById("settings-btn").onclick = async () => {
-    const panel = document.getElementById("settings-panel");
-    if (panel.classList.contains("hidden")) {
-        const s = await invoke("get_settings");
-        applySettingsDraft(s);
-        panel.classList.remove("hidden");
-    } else {
-        panel.classList.add("hidden");
-    }
-};
-
-document.getElementById("sp-silence").oninput = (e) => {
-    settingsDraft.silence_ms = Number(e.target.value);
-    document.getElementById("sp-silence-val").textContent = e.target.value;
-};
-document.getElementById("sp-thresh").oninput = (e) => {
-    settingsDraft.speech_threshold = Number(e.target.value) / 100;
-    document.getElementById("sp-thresh-val").textContent = (Number(e.target.value) / 100).toFixed(2);
-};
-document.getElementById("sp-turns").oninput = (e) => {
-    settingsDraft.history_turns = Number(e.target.value);
-    document.getElementById("sp-turns-val").textContent = e.target.value;
-};
-
-document.getElementById("sp-apply").onclick = async () => {
-    settingsDraft.system_prompt = document.getElementById("sp-prompt").value;
-    await invoke("apply_settings", { s: settingsDraft });
-    document.getElementById("settings-panel").classList.add("hidden");
-};
-document.getElementById("sp-defaults").onclick = async () => {
-    const defaults = await invoke("get_defaults");
-    applySettingsDraft(defaults);
-};
-document.getElementById("sp-cancel").onclick = () => {
-    document.getElementById("settings-panel").classList.add("hidden");
-};
