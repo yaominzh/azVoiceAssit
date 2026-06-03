@@ -35,7 +35,7 @@ flowchart TB
     ui -->|"ControlMsg"| pipeline
   end
 
-  refine <-->|"HTTP /v1/chat\nBearer rdaz1234"| omlx["oMLX service :8002\ngemma-4-e4b-it-8bit"]
+  refine <-->|"HTTP /v1/chat\nBearer YOUR_API_KEY"| omlx["oMLX service :8002\ngemma-4-e4b-it-8bit"]
   tts_client <-->|"HTTP POST /tts"| qwen3["Qwen3-TTS service :8123\nMLX-Audio (Python)\n'friendly colleague' voice"]
   tts_client --> spk["speaker\n(rodio)"]
 

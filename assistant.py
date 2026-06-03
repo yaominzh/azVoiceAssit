@@ -28,7 +28,7 @@ SPEECH_THRESHOLD = 0.5
 WHISPER_REPO = "mlx-community/whisper-base-mlx"
 HISTORY_MAXLEN = 40                          # bounded deque (~20 turns); fed into refine
 OMLX_BASE_URL = os.environ.get("OMLX_BASE_URL", "http://127.0.0.1:8002/v1")
-OMLX_API_KEY = os.environ.get("OMLX_API_KEY", "rdaz1234")
+OMLX_API_KEY = os.environ.get("OMLX_API_KEY", "")
 OMLX_MODEL = os.environ.get("OMLX_MODEL", "gemma-4-e4b-it-8bit")
 SYSTEM_PROMPT = (
     "You are a refinement assistant. The user gives you a raw spoken utterance. "

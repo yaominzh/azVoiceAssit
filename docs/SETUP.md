@@ -28,7 +28,7 @@ Architecture diagrams: `docs/archi/`. Design specs & plans: `docs/superpowers/`.
 ## Prerequisites (macOS, Apple Silicon)
 
 - **oMLX** running on `:8002` (OpenAI-compatible LLM server). Models: `gemma-4-e4b-it-8bit`
-  (default). API key `rdaz1234`. This is external to this repo — start it separately.
+  (default). API key (set via env var). This is external to this repo — start it separately.
 - **Homebrew packages:** `brew install portaudio cmake`
   - `portaudio` — Python mic capture (`sounddevice`).
   - `cmake` — builds `whisper.cpp` for the Rust app (`whisper-rs`).
@@ -69,7 +69,7 @@ brew install portaudio
 source .venv/bin/activate
 pip install --upgrade pip
 pip install -r requirements.txt          # sounddevice, silero-vad, mlx-whisper, openai, torch, ...
-export OMLX_API_KEY=rdaz1234
+export OMLX_API_KEY=YOUR_API_KEY
 ```
 
 First run downloads the Whisper weights (`whisper-base-mlx`, ~150 MB).
@@ -139,7 +139,7 @@ the binary **silent audio with no prompt** (you'll see captured peak ≈ 0).
 
 | Service        | Port  | Notes                                   |
 |----------------|-------|-----------------------------------------|
-| oMLX (LLM)     | 8002  | external; `Authorization: Bearer rdaz1234` |
+| oMLX (LLM)     | 8002  | external; `Authorization: Bearer YOUR_API_KEY` |
 | Qwen3-TTS      | 8123  | `tts_service/server.py`                 |
 | Python `--ui`  | 8765  | browser UI (`UI_PORT` to override)      |
 | Rust desktop   | —     | native window, no port                  |
