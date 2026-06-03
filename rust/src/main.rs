@@ -152,3 +152,50 @@ fn main() {
         .run(tauri::generate_context!())
         .expect("error running tauri app");
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crossbeam_channel::bounded;
+    use crate::events::ControlMsg;
+    use crate::settings::AppSettings;
+
+    fn make_ctrl() -> (crossbeam_channel::Sender<ControlMsg>, crossbeam_channel::Receiver<ControlMsg>) {
+        bounded(4)
+    }
+
+    #[test]
+    fn toggle_mic_sends_correct_msg() {
+        let (tx, rx) = make_ctrl();
+        send_ctrl(&tx, ControlMsg::ToggleMic).unwrap();
+        assert!(matches!(rx.try_recv().unwrap(), ControlMsg::ToggleMic));
+    }
+
+    #[test]
+    fn stop_tts_sends_stop() {
+        let (tx, rx) = make_ctrl();
+        send_ctrl(&tx, ControlMsg::Stop).unwrap();
+        assert!(matches!(rx.try_recv().unwrap(), ControlMsg::Stop));
+    }
+
+    #[test]
+    fn clear_transcript_sends_clear() {
+        let (tx, rx) = make_ctrl();
+        send_ctrl(&tx, ControlMsg::Clear).unwrap();
+        assert!(matches!(rx.try_recv().unwrap(), ControlMsg::Clear));
+    }
+
+    #[test]
+    fn apply_settings_validates_and_sends_settings_changed() {
+        let (tx, rx) = make_ctrl();
+        // silence_ms 9999 should be clamped to 5000 by validate()
+        let s = AppSettings { silence_ms: 9999, ..AppSettings::default() };
+        let validated = s.validate();
+        send_ctrl(&tx, ControlMsg::SettingsChanged(validated)).unwrap();
+        if let ControlMsg::SettingsChanged(s) = rx.try_recv().unwrap() {
+            assert_eq!(s.silence_ms, 5000);
+        } else {
+            panic!("expected SettingsChanged");
+        }
+    }
+}
