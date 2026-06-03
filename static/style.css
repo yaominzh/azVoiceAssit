@@ -15,7 +15,7 @@ body {
   align-items: center;
   padding: 0 10px;
   background: rgba(255,255,255,.02);
-  border-bottom: 1px solid rgba(255,255,255,.06);
+
   cursor: default;
   user-select: none;
   border-radius: 22px 22px 0 0;
@@ -33,10 +33,10 @@ body {
   display: flex;
   flex-direction: column;
   height: calc(100vh - 28px);
-  background: rgba(10,12,28,.38);
+  background: rgba(10,12,28,.22);
   backdrop-filter: blur(40px);
   -webkit-backdrop-filter: blur(40px);
-  border: 1px solid rgba(255,255,255,.10);
+
   border-top: none;
   border-radius: 0 0 22px 22px;
   background-image: radial-gradient(ellipse at top, rgba(59,130,246,.12) 0%, transparent 70%);
@@ -120,7 +120,7 @@ body {
 }
 #controls button {
   background: rgba(255,255,255,.06);
-  border: 1px solid rgba(255,255,255,.10);
+
   border-radius: 20px;
   color: rgba(226,232,240,.8);
   padding: 6px 14px;
