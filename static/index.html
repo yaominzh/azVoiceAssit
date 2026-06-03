@@ -4,21 +4,48 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Voice Assistant</title>
-  <link rel="stylesheet" href="/style.css">
+  <link rel="stylesheet" href="./style.css">
 </head>
 <body>
+  <div id="titlebar" data-tauri-drag-region>
+    <div class="window-controls">
+      <button class="wc close" id="btn-close" title="Close">×</button>
+    </div>
+    <span class="titlebar-label">Voice Assistant</span>
+  </div>
   <main id="app">
     <div id="top">
       <div id="taichi" class="listening">☯</div>
-      <div id="status">listening</div>
+      <div id="status">LISTENING</div>
+      <div id="timing-badge"></div>
     </div>
     <div id="transcript"></div>
     <div id="controls">
       <button id="mic">🎙 Mic</button>
-      <button id="clear">Clear</button>
-      <button id="stop">Stop</button>
+      <button id="stop">⏹ Stop</button>
+      <button id="clear">🗑 Clear</button>
+      <button id="settings-btn" class="gear">⚙</button>
     </div>
   </main>
-  <script src="/app.js"></script>
+
+  <!-- Settings panel -->
+  <div id="settings-panel" class="hidden">
+    <div class="settings-title">Settings</div>
+    <label class="s-label">System Prompt</label>
+    <textarea id="sp-prompt" rows="4"></textarea>
+    <label class="s-label">Silence timeout: <span id="sp-silence-val">700</span> ms</label>
+    <input type="range" id="sp-silence" min="300" max="5000" value="700">
+    <label class="s-label">Speech threshold: <span id="sp-thresh-val">0.50</span></label>
+    <input type="range" id="sp-thresh" min="10" max="90" value="50">
+    <label class="s-label">Context turns: <span id="sp-turns-val">0</span></label>
+    <input type="range" id="sp-turns" min="0" max="20" value="0">
+    <div class="s-btns">
+      <button id="sp-apply">Apply</button>
+      <button id="sp-defaults">Defaults</button>
+      <button id="sp-cancel">Cancel</button>
+    </div>
+  </div>
+
+  <script src="./app.js" defer></script>
 </body>
 </html>
