@@ -1,9 +1,12 @@
-/* Voice Assistant — Tauri frontend (window.__TAURI__ via withGlobalTauri: true) */
+/* Voice Assistant — Tauri frontend */
 
+// DOM refs (safe at parse time — HTML is static, elements always present)
 const yy     = document.getElementById("taichi");
 const status = document.getElementById("status");
 const timing = document.getElementById("timing-badge");
 const tx     = document.getElementById("transcript");
+
+// ── UI helpers ─────────────────────────────────────────────────────────────
 
 function updateState(value) {
     yy.className = value;
@@ -38,6 +41,8 @@ function esc(s) {
     return s.replace(/[&<>]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" }[c]));
 }
 
+let settingsDraft = {};
+
 function applySettingsDraft(s) {
     settingsDraft = { ...s };
     document.getElementById("sp-prompt").value = s.system_prompt ?? "";
@@ -52,53 +57,41 @@ function applySettingsDraft(s) {
     document.getElementById("sp-turns-val").textContent = ht;
 }
 
-let settingsDraft = {};
+// ── Tauri init with retry ──────────────────────────────────────────────────
+// window.__TAURI__ is injected by Tauri AFTER the page loads.
+// We retry for up to 3 seconds; show an error state if it never arrives.
 
-// ── Tauri bridge ───────────────────────────────────────────────────────────
-// All window.__TAURI__ access is inside DOMContentLoaded — Tauri injects the
-// global AFTER the page loads; destructuring at parse time throws if not ready.
-
-document.addEventListener("DOMContentLoaded", async () => {
+async function initApp() {
     const { listen } = window.__TAURI__.event;
     const { invoke } = window.__TAURI__.core;
-    const { getCurrentWindow } = window.__TAURI__.window;
+    const appWin   = window.__TAURI__.window.getCurrentWindow();
 
-    // Load initial state from Rust
-    try {
-        const init = await invoke("get_initial_state");
-        updateState(init.state);
-        applySettingsDraft(init.settings);
-    } catch (e) {
-        console.error("get_initial_state failed:", e);
-    }
+    // Load initial Rust state
+    const init = await invoke("get_initial_state");
+    updateState(init.state);
+    applySettingsDraft(init.settings);
 
-    // Subscribe to pipeline events
+    // Pipeline events from Rust bridge thread
     await listen("state", (e) => updateState(e.payload.value));
     await listen("turn",  (e) => addTurn(e.payload));
     await listen("clear", ()  => clearTranscriptUI());
 
     // Controls
-    document.getElementById("mic").onclick   = () => invoke("toggle_mic").catch(console.error);
-    document.getElementById("stop").onclick  = () => invoke("stop_tts").catch(console.error);
-    document.getElementById("clear").onclick = () => invoke("clear_transcript").catch(console.error);
+    document.getElementById("mic").onclick   = () => invoke("toggle_mic");
+    document.getElementById("stop").onclick  = () => invoke("stop_tts");
+    document.getElementById("clear").onclick = () => invoke("clear_transcript");
+    document.getElementById("btn-close").onclick = () => appWin.close();
 
-    // Close: use appWindow directly (getCurrentWindow().close() can fail silently in v2)
-    const appWin = getCurrentWindow();
-    document.getElementById("btn-close").onclick = async () => {
-        try { await appWin.close(); } catch(e) { console.error("close failed:", e); }
-    };
-
-    // Drag: startDragging() is more reliable than data-tauri-drag-region in Tauri v2
-    document.getElementById("titlebar").addEventListener("mousedown", async (e) => {
-        if (!e.target.closest(".window-controls")) {
-            try { await appWin.startDragging(); } catch(e) { /* ignore */ }
-        }
+    // Drag via startDragging (more reliable than data-tauri-drag-region in v2)
+    document.getElementById("titlebar").addEventListener("mousedown", (e) => {
+        if (!e.target.closest(".window-controls")) appWin.startDragging();
     });
 
-    document.addEventListener("keydown", async (e) => {
+    // Keyboard shortcuts
+    document.addEventListener("keydown", (e) => {
         if (e.key === "Escape" || (e.metaKey && e.key === "w")) {
             e.preventDefault();
-            try { await appWin.close(); } catch(e) { console.error("close failed:", e); }
+            appWin.close();
         }
     });
 
@@ -126,17 +119,36 @@ document.addEventListener("DOMContentLoaded", async () => {
         settingsDraft.history_turns = Number(e.target.value);
         document.getElementById("sp-turns-val").textContent = e.target.value;
     };
-
     document.getElementById("sp-apply").onclick = async () => {
         settingsDraft.system_prompt = document.getElementById("sp-prompt").value;
-        await invoke("apply_settings", { s: settingsDraft }).catch(console.error);
+        await invoke("apply_settings", { s: settingsDraft });
         document.getElementById("settings-panel").classList.add("hidden");
     };
     document.getElementById("sp-defaults").onclick = async () => {
-        const defaults = await invoke("get_defaults").catch(() => ({}));
-        applySettingsDraft(defaults);
+        const d = await invoke("get_defaults").catch(() => ({}));
+        applySettingsDraft(d);
     };
     document.getElementById("sp-cancel").onclick = () => {
         document.getElementById("settings-panel").classList.add("hidden");
     };
-});
+}
+
+function tryInit(attemptsLeft) {
+    if (window.__TAURI__) {
+        initApp().catch((e) => {
+            console.error("initApp failed:", e);
+            status.textContent = "INIT ERROR";
+            timing.textContent = String(e);
+        });
+        return;
+    }
+    if (attemptsLeft <= 0) {
+        status.textContent = "NO TAURI API";
+        timing.textContent = "window.__TAURI__ not injected after 3s";
+        return;
+    }
+    setTimeout(() => tryInit(attemptsLeft - 1), 100);
+}
+
+// Start retrying once DOM is ready (30 attempts × 100ms = 3 second timeout)
+document.addEventListener("DOMContentLoaded", () => tryInit(30));
