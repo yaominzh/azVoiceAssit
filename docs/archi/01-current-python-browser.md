@@ -1,4 +1,7 @@
-# Current Architecture — Python loop + browser UI (shipped)
+# Historical: Python loop + browser UI (P0 baseline)
+
+> **Status:** Superseded. The Rust desktop app (see `02-shipped-rust-desktop.md`) is now
+> the primary implementation. This doc is preserved as the P0 baseline reference.
 
 The as-built system: one Python process (`assistant.py`) running the
 `listen → transcribe → refine → speak` loop, with an optional in-process web UI
