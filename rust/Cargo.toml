@@ -4,8 +4,7 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
-eframe = "0.34"
-egui = "0.34"
+tauri = { version = "2", features = ["devtools", "macos-private-api"] }
 cpal = "0.17"
 rodio = "0.22"
 ort = "2.0.0-rc.12"
@@ -17,3 +16,5 @@ serde_json = "1"
 crossbeam-channel = "0.5"
 aec-rs = "1.0.0"
 
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
