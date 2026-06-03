@@ -36,3 +36,21 @@ pub enum ControlMsg {
     Stop,
     SettingsChanged(AppSettings),
 }
+
+/// Tauri event payloads — framework-neutral structs emitted by the bridge thread.
+/// Kept separate from UiEvent/ControlMsg so worker.rs stays unaware of Tauri.
+#[derive(Clone, serde::Serialize)]
+pub struct StatePayload {
+    pub value: &'static str,
+}
+
+#[derive(Clone, serde::Serialize)]
+pub struct TurnPayload {
+    pub heard: String,
+    pub refined: String,
+    pub timestamp: String,
+    pub endpoint_ms: u32,
+    pub stt_ms: u32,
+    pub refine_ms: u32,
+    pub reply_start_ms: u32,
+}
