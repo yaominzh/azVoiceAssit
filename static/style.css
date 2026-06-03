@@ -34,8 +34,8 @@ body {
   flex-direction: column;
   height: calc(100vh - 28px);
   background: rgba(10,12,28,.22);
-  backdrop-filter: blur(40px);
-  -webkit-backdrop-filter: blur(40px);
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
 
   border-top: none;
   border-radius: 0 0 22px 22px;
